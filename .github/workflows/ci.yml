@@ -1,0 +1,102 @@
+# CI: every push runs the contract tests, the Go unit tests, the local-devnet
+# end-to-end tests (anvil + monerod --regtest --offline) and Slither, and
+# uploads the logs.
+# Local devnets only: no keys, no RPC endpoints and no secrets are used here.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-go@v5
+        with: { go-version-file: swapd/go.mod, cache-dependency-path: swapd/go.sum }
+      - name: build the ed25519 reference (for the differential fuzz)
+        run: cd swapd && go build -o bin/edvec ./cmd/edvec
+      - name: forge test (incl. 2000-run differential ed25519 fuzz)
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          ED_FFI=true forge test --ffi -vv 2>&1 | tee ../forge-test.log
+          forge test --gas-report 2>&1 | tee ../gas-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: forge-logs, path: "forge-test.log\ngas-report.txt" }
+
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: swapd/go.mod, cache-dependency-path: swapd/go.sum }
+      - name: go vet + unit tests
+        working-directory: swapd
+        run: |
+          set -o pipefail
+          go vet ./...
+          go test -count=1 -v ./internal/... 2>&1 | tee ../go-test.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: go-logs, path: go-test.log }
+
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-go@v5
+        with: { go-version-file: swapd/go.mod, cache-dependency-path: swapd/go.sum }
+      - uses: actions/cache@v4
+        with: { path: .monero, key: monero-v0.18.5.4-linux-x64 }
+      - name: Monero binaries (GPG + SHA-256 checked)
+        run: scripts/setup.sh
+      - name: build contracts (the e2e tests deploy them to anvil)
+        working-directory: contracts
+        run: forge build
+      - name: end-to-end tests on local devnets
+        working-directory: swapd
+        run: |
+          set -o pipefail
+          MONERO_BIN=$GITHUB_WORKSPACE/.monero/monero-x86_64-linux-gnu-v0.18.5.4 \
+            E2E=1 go test ./e2e -v -count=1 -timeout 70m 2>&1 | tee ../e2e.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: e2e-log, path: e2e.log }
+
+  slither:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: slither (fails on medium or high findings)
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          pip install --quiet slither-analyzer
+          for c in XmrSwapV2 XmrSwapV3; do
+            echo "=== $c" | tee -a ../slither.txt
+            slither src/$c.sol --compile-force-framework foundry --filter-paths "lib|test" --fail-medium 2>&1 | tee -a ../slither.txt
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: slither, path: slither.txt }

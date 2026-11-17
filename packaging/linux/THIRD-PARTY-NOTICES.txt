@@ -1,0 +1,26 @@
+SeshSwap @VERSION@ for Linux x86_64: what's in this download
+
+seshswap
+  The wallet and launcher. MIT License (LICENSE), built from
+  github.com/carlcrainellc/seshswap. Go modules linked in are listed in NOTICE.
+
+session-router/  Session Router @SR_VERSION@
+  Session Router and the Oxen libraries (oxenmq, oxen-libquic, oxen-logging)
+  are GPL-3.0. Session Router here is a modified build of 1.1.1 (exit mapping,
+  Linux route handling and exit lease admission); the changes are the commits
+  on that branch, listed in debian/changelog. Source for this build:
+  @SR_SOURCE@
+  Oxen packages: deb.oxen.io (source packages in the same pool).
+  The other libraries in session-router/lib are unmodified Ubuntu 24.04
+  packages (glibc, libstdc++, gnutls, nettle, libsodium, unbound, openssl,
+  systemd's libsystemd and others) under their own licences, mostly LGPL,
+  GPL with library exceptions, MIT/BSD and Apache-2.0. Each package's
+  copyright file is in session-router/share/doc/<package>/copyright. Source:
+  snapshot.ubuntu.com/ubuntu/20261115T000000Z (noble, noble-updates) and
+  the Ubuntu archive.
+
+monero/  monero-wallet-rpc @MONERO_VERSION@
+  The official Monero CLI build from getmonero.org, unmodified, checked
+  against binaryFate's signed hashes.txt. Copyright The Monero Project and
+  others as listed in monero/LICENSE. BSD 3-clause licence: monero/LICENSE. Source: github.com/monero-project/monero
+  (tag @MONERO_VERSION@).

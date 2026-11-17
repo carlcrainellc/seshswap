@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SeshSwap (testnet)
+Comment=Swap test ETH or USDC for stagenet XMR
+Exec=@BIN@
+Icon=@ICON@
+Terminal=false
+Categories=Finance;Network;
+StartupNotify=false

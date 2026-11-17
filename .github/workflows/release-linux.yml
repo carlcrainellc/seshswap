@@ -1,0 +1,60 @@
+# Linux release: on a tag v*, build seshswap-<version>-linux-x86_64.tar.gz with
+# scripts/package-linux.sh, check it runs on clean Ubuntu 22.04 and 24.04
+# containers, and attach it to a DRAFT release (publish it by hand).
+# No secrets beyond the default GITHUB_TOKEN; testnet settings only.
+name: release-linux
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: swapd/go.mod, cache-dependency-path: swapd/go.sum }
+      - name: tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
+      - name: unit tests (launcher, Monero RPC)
+        working-directory: swapd
+        run: go vet ./cmd/seshswap ./internal/xmr && go test -count=1 ./internal/xmr/
+      - name: package
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] || VER="0.0.0-${GITHUB_SHA::7}"
+          RELEASE=$([[ "$GITHUB_REF_TYPE" == tag ]] && echo 1 || echo 0) ./scripts/package-linux.sh "$VER"
+      - name: runs on clean Ubuntu 22.04 and 24.04
+        run: |
+          for img in ubuntu:22.04 ubuntu:24.04; do
+            docker run --rm -v "$PWD/dist/release:/d:ro" "$img" sh -c \
+              'cd /tmp && tar xzf /d/seshswap-*-linux-x86_64.tar.gz && cd seshswap-*-linux-x86_64 && ./seshswap version && ./seshswap check'
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seshswap-linux-x86_64
+          path: dist/release/seshswap-*-linux-x86_64.tar.gz*
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: seshswap-linux-x86_64, path: out }
+      - name: draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --draft \
+            --title "SeshSwap $GITHUB_REF_NAME (testnet, Linux)" \
+            --notes "Testnet only (Arbitrum Sepolia, Monero stagenet). Linux x86_64. Not audited."

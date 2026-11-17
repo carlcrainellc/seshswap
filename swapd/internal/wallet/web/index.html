@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="wallet-token" content="">
+<title>Swap wallet</title>
+<style>
+  :root {
+    --bg: #0c1017;
+    --bg2: #121823;
+    --card: #161c27;
+    --card2: #1c2432;
+    --line: #2a3344;
+    --text: #e8edf5;
+    --muted: #8b97a8;
+    --accent: #5ee0b5;
+    --accent-dim: #1d4d3d;
+    --warn: #f0c14b;
+    --danger: #f07178;
+    --ok: #5ee0b5;
+    --shadow: 0 12px 40px rgba(0,0,0,.35);
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.5 "IBM Plex Sans", "Source Sans 3", ui-sans-serif, system-ui, sans-serif; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--accent); }
+  #app { min-height: 100%; display: flex; }
+  .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--line);
+    padding: 24px 16px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .brand { font-weight: 650; letter-spacing: -.02em; font-size: 18px; margin: 0 8px 18px;
+    display: flex; align-items: center; gap: 10px; }
+  .brand i { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg,#5ee0b5,#3aa0c8);
+    display: inline-block; }
+  .navbtn { background: none; border: 0; color: var(--muted); text-align: left; padding: 10px 12px;
+    border-radius: 10px; width: 100%; }
+  .navbtn:hover, .navbtn.on { background: var(--card); color: var(--text); }
+  .navbtn.on { color: var(--accent); }
+  .side-foot { margin-top: auto; font-size: 12px; color: var(--muted); padding: 8px; }
+  .conn { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 10px; line-height: 1.35; }
+  .conn i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; margin-top: 4px; }
+  .conn.connecting i { background: var(--warn); }
+  .conn.connected i { background: var(--accent); }
+  .conn.error i { background: #e06c6c; }
+  .conn.error { color: #f0a0a0; }
+  .conn small { display: block; color: var(--muted); margin-top: 2px; }
+  .main { flex: 1; padding: 36px 44px; max-width: 880px; }
+  .banner { background: #2a2410; border: 1px solid #5a4a18; color: var(--warn);
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 20px; font-size: 14px; }
+  .banner a, .banner button.link { color: var(--warn); }
+  .h1 { font-size: 28px; font-weight: 650; letter-spacing: -.03em; margin: 0 0 8px; }
+  .lead { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; box-shadow: var(--shadow); }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .bal { flex: 1; min-width: 180px; background: var(--card2); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px 20px; }
+  .bal .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  .bal .v { font-size: 26px; font-weight: 650; letter-spacing: -.03em; margin: 4px 0; }
+  .card .a { color: var(--muted); font-size: 13px; }
+  .bal .a { color: var(--muted); font-size: 12px; word-break: break-all; }
+  .btn { background: var(--accent); color: #06261b; border: 0; border-radius: 12px;
+    padding: 11px 18px; font-weight: 650; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:hover:not(:disabled) { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn.warn { background: var(--warn); color: #2a1e00; }
+  .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .btn.big { padding: 14px 22px; font-size: 17px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  input[type=text], input[type=password], input[type=number], textarea {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 11px 13px; width: 100%; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent-dim); border-color: var(--accent); }
+  label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 6px; }
+  .err { color: var(--danger); font-size: 14px; margin-top: 8px; }
+  .ok { color: var(--ok); }
+  .words { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; }
+  .words div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font-variant-numeric: tabular-nums; }
+  .words b { color: var(--muted); font-weight: 500; margin-right: 6px; font-size: 12px; }
+  .warnbox { background: #2a2410; border: 1px solid #5a4a18; color: var(--warn);
+    padding: 12px 14px; border-radius: 10px; font-size: 14px; }
+  .timeline { list-style: none; padding: 0; margin: 16px 0; }
+  .timeline li { padding: 10px 0 10px 22px; border-left: 2px solid var(--line); position: relative; color: var(--muted); }
+  .timeline li::before { content: ""; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--line); position: absolute; left: -6px; top: 16px; }
+  .timeline li.on { color: var(--text); }
+  .timeline li.on::before { background: var(--accent); }
+  .status-lg { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+  .refund { background: var(--card2); border-radius: 10px; padding: 12px 14px; color: var(--muted); font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    padding: 8px 6px; border-bottom: 1px solid var(--line); }
+  td { padding: 12px 6px; border-bottom: 1px solid var(--line); }
+  .center { max-width: 560px; margin: 8vh auto; }
+  .hide { display: none !important; }
+  .copy { background: none; border: 0; color: var(--accent); font-size: 12px; padding: 0 6px; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { background: var(--card2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; color: var(--muted); }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
+  table.q { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.q td, table.q th { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  table.q th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  tr.best td { color: var(--accent); }
+  td.why { color: var(--muted); }
+  .mono { font-family: ui-monospace, "IBM Plex Mono", monospace; font-size: 13px; }
+  @media (max-width: 720px) {
+    .sidebar { display: none; }
+    .main { padding: 20px; }
+    .words { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const $ = (s, el=document) => el.querySelector(s);
+const TOKEN = (document.querySelector('meta[name="wallet-token"]')||{}).content || "";
+const state = { status: null, balances: null, screen: "boot", words: null, checks: null, quote: null, swap: null, swaps: [], settings: null, err: "", draft: {} };
+
+async function api(path, opts={}) {
+  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Wallet-Token": TOKEN, ...(opts.headers||{}) } });
+  const t = await r.text();
+  let j = {};
+  try { j = t ? JSON.parse(t) : {}; } catch(e) { j = { error: t }; }
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.body = j; throw e; }
+  return j;
+}
+function esc(s){ return String(s??"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function short(a){ a=String(a||""); return a.length>16 ? a.slice(0,8)+"…"+a.slice(-6) : a; }
+function copy(t){ navigator.clipboard.writeText(t); }
+
+function connLine(st) {
+  const c = (st && st.connection) || {};
+  if (!c.label) return "";
+  const cls = c.state === "connected" ? "connected" : c.state === "connecting" ? "connecting" : c.state === "error" ? "error" : "";
+  const extra = c.state === "connected" && c.startupMs ? `<small>ready in ${(c.startupMs/1000).toFixed(1)} s</small>` : "";
+  const detail = c.detail ? `<small data-testid="conn-detail">${esc(c.detail)}</small>` : "";
+  return `<div class="conn ${cls}"><i></i><div>${esc(c.label)}${extra}${detail}</div></div>`;
+}
+
+function shell(main, {nav}={}) {
+  const st = state.status || {};
+  const unlocked = st.state === "unlocked";
+  const navItem = (id, label) => `<button class="navbtn ${nav===id?"on":""}" data-go="${id}">${label}</button>`;
+  return `
+  ${unlocked ? `<aside class="sidebar">
+    <div class="brand"><i></i> Swap wallet</div>
+    ${navItem("home","Balances")}
+    ${navItem("swap","Swap")}
+    ${navItem("search","Directory")}
+    ${st.exitsEnabled ? navItem("exits","Exits") : ""}
+    ${navItem("history","History")}
+    ${navItem("settings","Settings")}
+    <div class="side-foot">
+      <div id="conn" data-testid="conn">${connLine(st)}</div>
+      ${esc(st.network||"")}<br>
+      Test only. Not audited.
+      <div class="actions"><button class="btn ghost" data-act="lock">Lock</button></div>
+    </div>
+  </aside>` : ""}
+  <main class="main">
+    ${st.pending && nav!=="confirm-satchel" ? `<div class="banner" data-testid="pending-banner">A Satchel-style page asked for a trade.
+      <button class="btn ghost" data-go="confirm-satchel" style="margin-left:8px">Review it</button></div>` : ""}
+    ${st.openId && nav!=="progress" ? `<div class="banner" data-testid="open-banner">A trade is still in progress.
+      <button class="btn ghost" data-go="progress" data-id="${esc(st.openId)}" style="margin-left:8px">View it</button></div>` : ""}
+    ${main}
+  </main>`;
+}
+
+function welcome() {
+  return `<div class="center">
+    <div class="brand" style="margin-bottom:24px"><i></i> Swap wallet</div>
+    <h1 class="h1">Swap ETH for Monero, without giving anyone your money.</h1>
+    <p class="lead">A non-custodial wallet for ETH, USDC and XMR. If a trade goes wrong, your ETH is returned automatically. This build is for testnets only, and it is not audited.</p>
+    <div class="actions">
+      <button class="btn big" data-go="create" data-testid="create">Create a new wallet</button>
+      <button class="btn ghost big" data-go="restore" data-testid="restore">I have a 24-word backup</button>
+    </div>
+  </div>`;
+}
+
+function unlock() {
+  return `<div class="center"><div class="card stack">
+    <h1 class="h1">Unlock your wallet</h1>
+    <p class="lead">Enter the password you chose when you created this wallet. This is not your 24-word backup.</p>
+    <div><label>Password</label><input type="password" id="pw" data-testid="password" autofocus></div>
+    ${err()}
+    <div class="actions"><button class="btn big" data-act="unlock" data-testid="unlock">Unlock</button></div>
+  </div></div>`;
+}
+
+function createShow() {
+  const words = state.words || [];
+  return `<div class="center"><div class="card">
+    <h1 class="h1">Write these words down</h1>
+    <p class="lead">This is the only backup. Anyone with these words can spend your ETH, USDC and XMR. We cannot recover them for you. They are not saved on this computer in the clear.</p>
+    <div class="words" data-testid="seed-grid">${words.map((w,i)=>`<div><b>${i+1}</b>${esc(w)}</div>`).join("")}</div>
+    <div class="warnbox">Store them on paper, offline. Do not take a screenshot or email them.</div>
+    <div class="check" style="margin-top:16px"><input type="checkbox" id="wrote" data-testid="wrote"> <label for="wrote" style="margin:0">I have written these words down, in order.</label></div>
+    ${err()}
+    <div class="actions">
+      <button class="btn ghost" data-go="welcome">Back</button>
+      <button class="btn" id="cont" data-go="confirm" disabled data-testid="continue">Continue</button>
+    </div>
+  </div></div>`;
+}
+
+function confirmWords() {
+  const cs = state.checks || [];
+  return `<div class="center"><div class="card">
+    <h1 class="h1">Check your backup</h1>
+    <p class="lead">Type the words we ask for, to make sure you wrote them down correctly.</p>
+    <div class="stack">${cs.map(n=>`<div><label>Word ${n}</label><input type="text" data-word="${n}" autocapitalize="off" autocomplete="off" data-testid="word-${n}"></div>`).join("")}</div>
+    ${err()}
+    <div class="actions">
+      <button class="btn ghost" data-go="create-show">Back to the words</button>
+      <button class="btn" data-act="to-password" data-testid="words-ok">Continue</button>
+    </div>
+  </div></div>`;
+}
+
+function setPassword(mode) {
+  const title = mode === "restore" ? "Set a password, and restore" : "Set a password";
+  return `<div class="center"><div class="card stack">
+    <h1 class="h1">${title}</h1>
+    <p class="lead">This password encrypts the wallet on this computer. It cannot replace a lost 24-word backup. Use at least 8 characters.</p>
+    ${mode==="restore" ? `<div><label>Your 24-word backup</label><textarea id="mn" rows="4" data-testid="mnemonic" placeholder="word1 word2 … word24"></textarea></div>` : ""}
+    <div><label>Password</label><input type="password" id="pw1" data-testid="pw1"></div>
+    <div><label>Type it again</label><input type="password" id="pw2" data-testid="pw2"></div>
+    ${err()}
+    <div class="actions">
+      <button class="btn ghost" data-go="${mode==="restore"?"welcome":"confirm"}">Back</button>
+      <button class="btn" data-act="${mode==="restore"?"do-restore":"do-create"}" data-testid="save">Save and open</button>
+    </div>
+  </div></div>`;
+}
+
+function home() {
+  const b = state.balances || {};
+  const st = state.status || {};
+  const cell = (k, v, addr, err) => `<div class="bal"><div class="k">${k}</div>
+    <div class="v" data-testid="bal-${k}">${esc(v ?? "—")}</div>
+    ${err ? `<div class="${k==="USDC"?"a":"err"}">${esc(err)}</div>` : ""}
+    ${addr ? `<div class="a mono">${esc(addr)} <button class="copy" data-copy="${esc(addr)}">Copy</button></div>` : ""}</div>`;
+  return shell(`
+    <h1 class="h1">Balances</h1>
+    <p class="lead">${esc(st.network||"")} · Test only. Not audited.</p>
+    <div class="row">
+      ${cell("ETH", b.eth, b.ethAddress, b.ethError)}
+      ${cell("USDC", b.usdc ?? "0", b.usdcAddress, b.usdcError || b.usdcNote)}
+      ${cell("XMR", b.xmr, b.xmrAddress, b.xmrError)}
+    </div>
+    <div class="actions"><button class="btn big" data-go="swap" data-testid="go-swap">Swap</button>
+      ${st.faucet ? `<button class="btn ghost" data-act="faucet-claim" data-testid="faucet-claim" ${state.faucetBusy?"disabled":""}>${state.faucetBusy ? "Getting test coins…" : "Get test coins"}</button>` : ""}</div>
+    ${st.faucet ? faucetBox() : ""}
+  `, {nav:"home"});
+}
+
+function faucetBox() {
+  if (state.faucetBusy) return `<div class="a" data-testid="faucet-busy">Asking the testnet faucet. Your computer does a few seconds of work first, instead of a captcha.</div>`;
+  const f = state.faucet;
+  if (!f) return `<div class="a">Free test ETH, mock USDC and stagenet XMR, sent to this wallet. One claim a day.</div>`;
+  const rows = (f.payouts||[]).map(p => `<li data-testid="faucet-${esc(p.coin.toLowerCase())}">${p.tx
+      ? `${esc(p.amount)} ${esc(p.coin)}: sent${p.txUrl ? ` · <a href="${esc(p.txUrl)}" target="_blank" rel="noopener">transaction</a>` : ""}`
+      : `${esc(p.coin)}: ${esc(p.note || "not sent")}`}</li>`).join("");
+  return `<div class="card" data-testid="faucet-result" style="margin-top:12px">
+    <div class="${f.ok ? "" : "err"}">${esc(f.message||"")}</div>
+    ${rows ? `<ul style="margin:8px 0 0;padding-left:18px">${rows}</ul>` : ""}</div>`;
+}
+
+function fairPriceBox(q) {
+  if (!q) return "";
+  if (q.fairPriceError) {
+    return `<div class="a" data-testid="fair-price-err">Fair price check could not run: ${esc(q.fairPriceError)}</div>`;
+  }
+  const f = q.fairPrice;
+  if (!f) return "";
+  const off = (Number(f.offBps||0)/100).toFixed(1);
+  const fair = Number(f.fairXmrUsd).toFixed(2);
+  const implied = Number(f.impliedXmrUsd).toFixed(2);
+  const max = (Number(f.maxBps||500)/100).toFixed(0);
+  if (f.warn) {
+    return `<div class="warnbox" data-testid="fair-price-warn">This quote is ${off}% away from the fair price (${esc(f.source||"the XMR/USD feed")}: $${fair} / XMR). The quote implies $${implied} / XMR. Check the amounts.</div>`;
+  }
+  return `<div class="a" data-testid="fair-price-ok">Fair price check: within ${max}% of ${esc(f.source||"the XMR/USD feed")} ($${fair} / XMR; quote implies $${implied}).</div>`;
+}
+
+function explorerTx(hash) {
+  const ex = ((state.status && state.status.explorer) || "https://sepolia.etherscan.io").replace(/\/$/, "");
+  return ex + "/tx/" + hash;
+}
+
+function quotesBox(q) {
+  const qs = (q && q.quotes) || [];
+  if (!qs.length) return q && q.source === "configured" ? `<div class="a">From your configured maker.</div>` : "";
+  const rows = qs.map(m => `<tr class="${m.best?"best":""}" data-testid="maker-quote">
+    <td>#${esc(m.listingId)}<div class="a mono">${esc(short(m.sesh))}</div></td>
+    <td>${m.bondEth ? esc(m.bondEth)+" ETH" : "—"}<div class="a">cap ${m.maxEth ? esc(m.maxEth)+" ETH" : "—"}</div></td>
+    <td>${m.ok ? esc(m.xmr)+" XMR" : "—"}${m.ok && m.offBps ? `<div class="a">${(m.offBps/100).toFixed(1)}% from feed</div>` : ""}</td>
+    <td class="why">${m.best ? "Best quote" : m.ok ? "OK" : esc(m.reason||"")}<div class="a">${(m.ms/1000).toFixed(1)} s</div></td></tr>`).join("");
+  return `<div><label>Makers asked (registry)</label><table class="q" data-testid="maker-quotes"><thead><tr><th>Maker</th><th>Bond</th><th>Quote</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>
+    ${q.fallback ? `<div class="a">No bonded maker gave a usable quote, so this one is from your configured maker.</div>` : ""}
+    <div class="a">Each maker's bond is read on-chain. A maker can quote at most its bond × the registry's cap factor, and its quote must be close to the price feed.</div></div>`;
+}
+
+function search() {
+  const r = state.search || {};
+  const tags = r.tagList || [];
+  const sq = state.searchQ || {};
+  const rows = (r.listings||[]).map(e => `<tr data-testid="listing">
+    <td>#${esc(e.id)}</td>
+    <td><span class="chip">${esc(e.tag)}</span></td>
+    <td class="mono">${esc(e.sesh)}<div class="a" style="font-family:inherit">${esc(e.meta)}</div></td>
+    <td>${esc(e.bondEth)} ETH<div class="a">${esc(e.statusText)}${e.challenged?" · challenged":""}</div></td></tr>`).join("")
+    || `<tr><td colspan="4" style="color:var(--muted)">${r.registry ? "Nothing matches." : "Loading…"}</td></tr>`;
+  return shell(`
+    <h1 class="h1">Directory</h1>
+    <p class="lead">Every listing in the on-chain .sesh registry. Each one posted a bond. Makers' bonds can be slashed; other listings only answer to a challenge, so check a site yourself before trusting it.</p>
+    <div class="card stack">
+      <div style="display:flex;gap:8px"><input type="text" id="sq" data-testid="search-q" placeholder="Search names and descriptions" value="${esc(sq.q||"")}" style="flex:1">
+        <button class="btn ghost" data-act="do-search" data-testid="do-search">Search</button></div>
+      <div class="chips">${["",...tags].map(t => `<button class="chip ${(sq.tag||"")===t?"on":""}" data-tag="${esc(t)}">${t ? esc(t)+" ("+(r.tags||{})[t]+")" : "all"}</button>`).join("")}</div>
+      <table class="q" data-testid="search-results"><thead><tr><th>#</th><th>Tag</th><th>Address</th><th>Bond</th></tr></thead><tbody>${rows}</tbody></table>
+      ${r.registry ? `<div class="a">Registry <a class="mono" href="${esc(r.registryUrl)}" target="_blank">${esc(short(r.registry))}</a>, synced to block ${esc(r.lastBlock)}.${r.syncError ? " Last sync failed: "+esc(r.syncError) : ""}</div>` : ""}
+      ${err()}
+    </div>`, {nav:"search"});
+}
+
+async function runSearch() {
+  const sq = state.searchQ || {};
+  state.search = await api("/v1/registry/search?q="+encodeURIComponent(sq.q||"")+"&tag="+encodeURIComponent(sq.tag||""));
+}
+
+function swapForm() {
+  const q = state.quote;
+  const d = state.draft || {};
+  return shell(`
+    <h1 class="h1">Swap</h1>
+    <p class="lead">You sell ETH or USDC and you buy XMR. The other direction comes later.</p>
+    <div class="card stack">
+      <div><label>You sell</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="asset" data-testid="asset" style="flex:0 0 auto">
+            <option value="eth" ${d.asset!=="usdc"?"selected":""}>ETH</option>
+            <option value="usdc" ${d.asset==="usdc"?"selected":""}>USDC</option>
+          </select>
+          <input type="text" id="eth-amt" data-testid="eth-amt" placeholder="${d.asset==="usdc"?"5":"0.01"}" value="${esc(d.eth||"")}" style="flex:1">
+        </div>
+      </div>
+      <div class="actions"><button class="btn ghost" data-act="get-quote" data-testid="get-quote">Get a quote</button></div>
+      ${state.quoteFail ? quotesBox(state.quoteFail) : ""}
+      ${q ? `<div class="bal">
+        <div class="k">You buy${q.listingId ? ` · best of ${(q.quotes||[]).filter(x=>x.ok).length} bonded maker quote(s)` : ""}</div>
+        <div class="v">${esc(q.xmr)} XMR</div>
+        <div class="a">Quote expires ${q.expires ? new Date(q.expires*1000).toLocaleString("en-US",{timeZone:"America/Chicago"})+" CT" : "soon"}.
+          ${q.estReadySecs ? `Swap done in about ${Math.round(q.estReadySecs/60)} minutes.` : ""}
+          ${q.estSpendableSecs ? ` XMR spendable in about ${Math.round(q.estSpendableSecs/60)} minutes.` : ""}
+          ${q.premiumEth && q.premiumEth!=="0" ? ` A small premium of ${esc(q.premiumEth)} ETH is returned when the swap succeeds.` : ""}
+          ${q.demo ? " Sample quote (demo)." : ""}
+        </div>
+      </div>
+      ${fairPriceBox(q)}
+      ${quotesBox(q)}
+      <div class="refund">${esc("If the other side does not show up, your "+(q.asset||"ETH")+" is returned automatically.")}</div>
+      <div class="warnbox">This is not audited. Confirm the amounts carefully.</div>
+      <div class="actions"><button class="btn big" data-act="confirm-swap" data-testid="confirm-swap">Review and confirm</button></div>` : ""}
+      ${err()}
+    </div>
+  `, {nav:"swap"});
+}
+
+function confirmSwap() {
+  const q = state.quote || {};
+  return shell(`
+    <h1 class="h1">Confirm this swap</h1>
+    <div class="card stack">
+      <div class="bal"><div class="k">You sell</div><div class="v">${esc(q.valueLabel||((q.valueEth||"")+" ETH"))}</div></div>
+      <div class="bal"><div class="k">You buy at least</div><div class="v">${esc(q.xmr)} XMR</div></div>
+      ${q.listingId ? `<div class="a" data-testid="confirm-maker">From bonded maker #${esc(q.listingId)} (${esc(short(q.sesh))}), bond ${esc(q.bondEth)} ETH. It signs a commitment that is recorded on-chain after your lock; if it doesn't acknowledge its XMR lock in time, part of its bond is paid to you.</div>` : ""}
+      ${fairPriceBox(q)}
+      <p class="lead">This is the binding approval. Satchel, if you used it, cannot skip this step. After you confirm, your ${esc(q.asset||"ETH")} is locked in the contract until the swap finishes or is refunded.</p>
+      <div class="refund">${q.estReadySecs ? `Swap done in about ${Math.round(q.estReadySecs/60)} minutes. ` : ""}If something goes wrong, your ${esc(q.asset||"ETH")} is returned automatically.</div>
+      <div class="warnbox">Test only. Not audited.</div>
+      ${err()}
+      <div class="actions">
+        <button class="btn ghost" data-go="swap">Back</button>
+        <button class="btn big" data-act="start-swap" data-testid="start-swap">Confirm and lock ${esc(q.asset||"ETH")}</button>
+      </div>
+    </div>
+  `, {nav:"swap"});
+}
+
+function progress() {
+  const s = state.swap || {};
+  return shell(`
+    <h1 class="h1">Trade progress</h1>
+    <div class="card">
+      <p class="status-lg" data-testid="status">${esc(s.status||"Loading…")}</p>
+      <p class="lead">${esc(s.valueLabel||((s.valueEth||"")+" ETH"))} → ${esc(s.xmr||"")} XMR</p>
+      ${s.refundLine ? `<div class="refund" data-testid="refund">${esc(s.refundLine)}</div>` : ""}
+      <ul class="timeline">
+        ${[["negotiated","Quote agreed"],["locking","Locking "+(s.asset||"ETH")],["locked","Waiting for XMR"],["readying","Confirmations in"],["ready","Finishing"],["sweeping","Sending XMR to you"],["done","Done"],["cancelling","Refund started"],["refunding","Refunding"],["refunded","Refunded"]].map(([p,l]) =>
+          `<li class="${s.phase===p||(s.phase==="done"&&p==="done")?"on":""}">${l}</li>`).join("")}
+      </ul>
+      ${s.lockTx ? `<p class="mono a">${esc(s.asset||"ETH")} lock: <a href="${explorerTx(s.lockTx)}" target="_blank">${esc(s.lockTx)}</a></p>` : ""}
+      ${s.xmrLockTx ? `<p class="mono a">XMR lock: <a href="https://stagenet.xmrchain.net/tx/${esc(s.xmrLockTx)}" target="_blank">${esc(s.xmrLockTx)}</a></p>` : ""}
+      ${s.claimTx ? `<p class="mono a" data-testid="claim-tx">Claim: <a href="${explorerTx(s.claimTx)}" target="_blank">${esc(s.claimTx)}</a></p>` : ""}
+      ${s.refundTx ? `<p class="mono a" data-testid="refund-tx">Refund: <a href="${explorerTx(s.refundTx)}" target="_blank">${esc(s.refundTx)}</a></p>` : ""}
+      ${s.registry ? `<div class="a" data-testid="registry-line">${esc(s.registry.text)}
+        ${s.registry.commitTx ? `<div class="mono">Commitment: <a href="${explorerTx(s.registry.commitTx)}" target="_blank">${esc(short(s.registry.commitTx))}</a></div>` : ""}
+        ${s.registry.slashTx ? `<div class="mono">Penalty: <a href="${explorerTx(s.registry.slashTx)}" target="_blank">${esc(short(s.registry.slashTx))}</a></div>` : ""}</div>` : ""}
+      ${s.log && s.log.length ? `<details><summary>Technical log</summary><pre class="mono" style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(s.log.join("\\n"))}</pre></details>` : ""}
+    </div>
+  `, {nav:"progress"});
+}
+
+function history() {
+  const rows = (state.swaps||[]).map(s => `<tr>
+    <td>${esc(s.valueLabel||((s.valueEth||"")+" ETH"))} → ${esc(s.xmr)} XMR</td>
+    <td>${esc(s.status)}</td>
+    <td>${s.created ? new Date(s.created*1000).toLocaleString("en-US",{timeZone:"America/Chicago"})+" CT" : ""}</td>
+    <td><button class="btn ghost" data-go="progress" data-id="${esc(s.id)}">View</button></td>
+  </tr>`).join("") || `<tr><td colspan="4" style="color:var(--muted)">No trades yet.</td></tr>`;
+  return shell(`<h1 class="h1">History</h1>
+    <div class="card"><table><thead><tr><th>Trade</th><th>Status</th><th>Time (CT)</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`, {nav:"history"});
+}
+
+function settings() {
+  const st = state.status || {};
+  const se = state.settings || {};
+  return shell(`
+    <h1 class="h1">Settings</h1>
+    <div class="card stack">
+      <div><label>Network</label><div>${esc(st.network)}</div></div>
+      ${(st.connection||{}).exit ? `<div class="banner" data-testid="settings-exit-note">Exit #${esc(st.connection.exit)} is connected. The private connection stays up until you press Disconnect on the Exits screen; locking or closing the wallet disconnects the exit first and puts DNS back.</div>` : ""}
+      <div><label>Connection to the maker</label>
+        ${[
+          ["auto","Auto (recommended). Uses your own Session Router if one is already running on this computer and reaches the maker. Otherwise starts the bundled one only while you get a quote or swap. Hides your IP address from the maker."],
+          ["bundled","Bundled only. Always uses the Session Router that comes with the wallet, started only while needed."],
+          ["existing","Existing only. Only uses a Session Router that is already running on this computer (a system service or one you started). The wallet never starts, stops or changes it."],
+          ["direct","Direct. A plain connection. Use it if the private one won't connect. The maker can see your IP address."],
+        ].map(([v,t]) => `<div><label style="display:inline;text-transform:none"><input type="radio" name="transport" value="${v}" data-testid="transport-${v}" ${se.transport===v?"checked":""}> ${esc(t)}</label></div>`).join("")}
+      </div>
+      <div><label>Private maker address (.sesh)</label>
+        <input type="text" id="maker-sesh" data-testid="maker-sesh" value="${esc(se.makerSeshUrl||"")}" placeholder="http://….sesh"></div>
+      <div><label>Direct maker address</label>
+        <input type="text" id="maker" data-testid="maker" value="${esc(se.makerUrlDirect||"")}" placeholder="http://…"></div>
+      ${se.exitLease ? `<div><label>Your Session Router's RPC address (for exits)</label>
+        <input type="text" id="exit-rpc" data-testid="exit-rpc" value="${esc(se.exitRouterRpc||"")}" placeholder="tcp://127.0.0.1:1190 (optional)">
+        <div class="a">Only needed if you want exits to go through a router you run yourself. It must be the exit build of 1.1.1 with its RPC turned on. Leave it empty to use the bundled router.</div></div>` : ""}
+      <div class="actions"><button class="btn" data-act="save-settings">Save connection</button></div>
+      <hr style="border:0;border-top:1px solid var(--line);width:100%">
+      <div><label>Your ETH address</label><div class="mono">${esc(st.ethAddress)} <button class="copy" data-copy="${esc(st.ethAddress)}">Copy</button></div></div>
+      <div><label>Your XMR address</label><div class="mono">${esc(st.xmrAddress)} <button class="copy" data-copy="${esc(st.xmrAddress)}">Copy</button></div></div>
+      <p class="lead">To see your 24-word backup again, enter your password.</p>
+      <div><label>Password</label><input type="password" id="pw-bak" data-testid="pw-bak"></div>
+      <div class="actions"><button class="btn ghost" data-act="show-backup" data-testid="show-backup">Show backup</button></div>
+      ${state.backupWords ? `<div class="words">${state.backupWords.map((w,i)=>`<div><b>${i+1}</b>${esc(w)}</div>`).join("")}</div>` : ""}
+      ${err()}
+    </div>
+  `, {nav:"settings"});
+}
+
+function err(){ return state.err ? `<div class="err" data-testid="error">${esc(state.err)}</div>` : ""; }
+
+
+function confirmSatchel() {
+  const p = (state.status && state.status.pending) || {};
+  return shell(`
+    <h1 class="h1">Approve this trade</h1>
+    <div class="card stack">
+      <p class="lead">A local Satchel-style page asked for this trade. Approve it here. Satchel cannot skip this step.</p>
+      <div class="bal"><div class="k">You sell</div><div class="v">${esc(p.amount||"")} ${esc(p.asset||"")}</div></div>
+      ${p.origin ? `<p class="a">Asked by ${esc(p.origin)}</p>` : ""}
+      <div class="refund">If you approve, the wallet will get a fresh quote and lock the funds. If you reject, nothing is locked.</div>
+      <div class="warnbox">Test only. Not audited.</div>
+      ${err()}
+      <div class="actions">
+        <button class="btn ghost" data-act="satchel-reject" data-testid="satchel-reject">Reject</button>
+        <button class="btn big" data-act="satchel-approve" data-testid="satchel-approve">Approve in this wallet</button>
+      </div>
+    </div>
+  `, {nav:"swap"});
+}
+
+
+function ctTime(unix){ return new Date(unix*1000).toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})+" CT"; }
+function leftText(secs){ secs=Math.max(0,secs|0); const h=Math.floor(secs/3600), m=Math.floor(secs%3600/60), s=secs%60; return h ? `${h} h ${m} min` : m ? `${m} min ${s} s` : `${s} s`; }
+function exitsScreen() {
+  const x = state.exits || {};
+  const now = x.now || Math.floor(Date.now()/1000);
+  const mine = x.leases || [];
+  const activeFor = id => mine.filter(l => l.listingId===id && l.end>now).reduce((a,l)=>Math.max(a,l.end),0);
+  const c = x.connected;
+  const d = state.exitDraft || {};
+  const rows = (x.exits||[]).map(e => {
+    const info = e.info || {};
+    const until = activeFor(e.id);
+    const prices = [e.usdcPerHour ? esc(e.usdcPerHour)+" USDC" : "", e.ethPerHour ? esc(e.ethPerHour)+" ETH" : ""].filter(Boolean).join(" or ");
+    const buy = e.forSale ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input type="number" min="1" max="${e.maxHours}" value="${esc(d["h"+e.id]||1)}" id="hours-${e.id}" data-testid="exit-hours" style="width:70px"> h
+        <select id="asset-${e.id}" data-testid="exit-asset">${e.usdcPerHour?`<option value="usdc">USDC</option>`:""}${e.ethPerHour?`<option value="eth">ETH</option>`:""}</select>
+        <button class="btn ghost" data-exit-buy="${e.id}" data-testid="exit-buy">Buy</button></div>` : `<span class="a">${esc(e.why||"not for sale")}</span>`;
+    const conn = c && c.listingId===e.id ? (c.phase==="up" ? `<span class="chip on">connected</span>` : c.phase==="noroutes" ? `<span class="chip">routes not up</span>` : `<span class="chip">waiting for routes</span>`)
+      : until ? `<button class="btn" data-exit-connect="${e.id}" data-testid="exit-connect">Connect</button><div class="a">paid until ${esc(ctTime(until))}</div>` : "";
+    return `<tr data-testid="exit-row">
+      <td>#${esc(e.id)}</td>
+      <td><div class="mono">${esc(short(e.sesh))}</div><div class="a">${info.country?"Country "+esc(info.country)+" · ":""}web only (ports 80 and 443)${info.dns?" · own DNS "+esc(info.dns):""}${info.note?" · "+esc(info.note):""}</div></td>
+      <td>${prices ? prices+" per hour" : "—"}${e.maxHours?`<div class="a">up to ${esc(e.maxHours)} h at a time · bond ${esc(e.bondEth)} ETH</div>`:""}</td>
+      <td>${buy}</td><td>${conn}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" style="color:var(--muted)">${x.exits ? "No exits are listed yet." : "Loading…"}</td></tr>`;
+  const hist = mine.slice(0,8).map(l => `<tr><td>#${esc(l.listingId)}</td><td>${esc(l.hours)} h</td><td>${esc(l.paid)}${l.via==="swap"?` <span class="a">from a swap</span>`:""}</td>
+      <td>${esc(ctTime(l.start))} → ${esc(ctTime(l.end))}</td><td>${l.active?`<span class="chip on">active</span>`:`<span class="chip">ended</span>`}</td>
+      <td><a href="${esc(l.txUrl)}" target="_blank">tx</a></td></tr>`).join("");
+  return shell(`
+    <h1 class="h1">Exits</h1>
+    <p class="lead">Rent a Session Router exit by the hour. Websites then see the exit's address instead of yours.</p>
+    <ul class="a" data-testid="exit-warnings" style="margin:0 0 12px 18px;padding:0">
+      <li>Connecting installs a default route: all of this computer's traffic goes to the exit.</li>
+      <li>The exit carries web traffic (ports 80 and 443) and its own DNS only. Other programs (mail, SSH, games, an Ethereum node on 8545) stall until you disconnect.</li>
+      <li>Paid hours are spent either way. They are not refunded if the exit goes down, and nothing renews by itself.</li>
+      <li>The wallet says Connected only once this computer's routes are up.</li>
+    </ul>
+    ${state.exitConfirm ? exitConfirmCard() : ""}
+    ${c ? exitConnCard(c) : ""}
+    ${x.busy || state.exitBusy ? `<div class="banner">${esc(state.exitBusy||"Working…")}</div>` : ""}
+    <div class="card stack" style="margin-top:14px">
+      <table class="q" data-testid="exit-list"><thead><tr><th>#</th><th>Exit</th><th>Price</th><th>Buy time</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      ${x.exitLease ? `<div class="a">Payments go straight to each seller through <a class="mono" href="${esc(x.exitLeaseUrl)}" target="_blank">ExitLease ${esc(short(x.exitLease))}</a>. The seller's server lets you in once your purchase is confirmed, and drops you when the time ends.</div>` : ""}
+      ${x.last ? `<div class="a" data-testid="exit-last">${esc(x.last)}</div>` : ""}
+      ${err()}
+    </div>
+    ${hist ? `<div class="card stack" style="margin-top:14px"><label>Your exit time</label><table class="q" data-testid="exit-history"><thead><tr><th>Exit</th><th>Hours</th><th>Paid</th><th>Time (CT)</th><th></th><th></th></tr></thead><tbody>${hist}</tbody></table></div>` : ""}
+  `, {nav:"exits"});
+}
+function check(ok, text, extra){ return `<div class="a">${ok?"✓":"✗"} ${esc(text)}${extra?` <span class="mono">${esc(extra)}</span>`:""}</div>`; }
+function exitConnCard(c) {
+  const head = c.phase==="up"
+    ? `<div class="conn connected"><i></i><div>Connected to exit #${esc(c.listingId)} <small>${esc(leftText(c.secondsLeft))} left · ends ${esc(ctTime(c.end))} · through ${c.source==="existing"?"your own":"the bundled"} Session Router</small></div></div>`
+    : c.phase==="noroutes"
+    ? `<div class="conn error"><i></i><div>Not connected: this computer's routes aren't up <small>exit #${esc(c.listingId)} is mapped · paid until ${esc(ctTime(c.end))}</small></div></div>`
+    : `<div class="conn connecting"><i></i><div>Waiting for this computer's routes… <small>exit #${esc(c.listingId)}</small></div></div>`;
+  const checks = `<div data-testid="exit-checks">
+      ${check(c.sessionLive, "Session to the exit is up")}
+      ${check(c.exitCapable, "The exit accepts traffic")}
+      ${check(c.routesUp, c.routesUp ? "This computer's routes are installed" : "This computer's routes are not installed", c.routesUp ? "" : c.routesReason)}</div>`;
+  const dns = c.phase!=="up" ? `<div class="a" data-testid="exit-dns">System DNS was not changed. It switches to the exit's resolver only once the routes are up.</div>`
+    : !c.dns ? ""
+    : c.dnsState === "on" ? `<div class="a" data-testid="exit-dns">This computer's DNS uses the exit's resolver <span class="mono">${esc(c.dns)}</span> while connected. It goes back when you disconnect.</div>`
+    : c.dnsState === "switching" ? `<div class="a" data-testid="exit-dns">Switching this computer's DNS to the exit's resolver <span class="mono">${esc(c.dns)}</span>…</div>`
+    : `<div class="a" data-testid="exit-dns">To keep lookups on the exit, set your DNS to its resolver <span class="mono">${esc(c.dns)}</span> while connected.${(c.dnsState||"").startsWith("failed") ? ` The wallet couldn't do it: ${esc(c.dnsState.slice(8))}` : ""}</div>`;
+  const acts = c.phase==="noroutes"
+    ? `<button class="btn" data-exit-connect="${c.listingId}" data-testid="exit-retry">Retry</button>`
+    : `<button class="btn${c.expiring ? "" : " ghost"}" data-act="exit-topup" data-testid="exit-topup">Add 1 hour${c.topUpPrice ? ` · ${esc(c.topUpPrice)}` : ""}</button>`;
+  return `<div class="card stack" data-testid="exit-connected" data-phase="${esc(c.phase)}">
+      ${head}${checks}
+      ${c.phase==="up" ? `<div class="a" data-testid="exit-route">The default route goes through the exit. Web (80/443) and the exit's DNS work; anything else is dropped until you disconnect.</div>` : ""}
+      ${dns}
+      ${c.expiring ? `<div class="banner" data-testid="exit-expiring">Your time ends in ${esc(leftText(c.secondsLeft))} (${esc(ctTime(c.end))}). Add an hour to stay connected.</div>` : ""}
+      <div class="actions">${acts}
+        <button class="btn ghost" data-act="exit-disconnect" data-testid="exit-disconnect">Disconnect</button></div>
+    </div>`;
+}
+function exitConfirmCard() {
+  const q = state.exitConfirm;
+  const what = q.kind==="topup" ? `Add ${esc(q.hours)} hour on exit #${esc(q.listingId)}` : `Buy ${esc(q.hours)} hour(s) on exit #${esc(q.listingId)}`;
+  return `<div class="card stack" data-testid="exit-confirm">
+      <h2 style="margin:0">${what}</h2>
+      <div><label>Price</label><div data-testid="exit-confirm-price">${q.price ? esc(q.price) : "getting the price…"}</div></div>
+      ${q.newEnd ? `<div><label>New end</label><div data-testid="exit-confirm-end">${esc(ctTime(q.newEnd))}${q.kind==="buy" ? " (about; time starts when the purchase confirms)" : ""}</div></div>` : ""}
+      <div class="a">Paid now from this wallet to the seller through ExitLease. Not refunded if the exit goes down. Test only. Not audited.</div>
+      <div class="actions"><button class="btn" data-act="exit-confirm-pay" data-testid="exit-confirm-pay" ${q.price?"":"disabled"}>Pay ${q.price ? esc(q.price) : ""}</button>
+        <button class="btn ghost" data-act="exit-confirm-cancel" data-testid="exit-confirm-cancel">Cancel</button></div>
+    </div>`;
+}
+async function loadExits(){ state.exits = await api("/v1/exits"); }
+let exitTimer;
+function startExitPoll(){ if (exitTimer) clearInterval(exitTimer); exitTimer = setInterval(async () => {
+  if (state.screen !== "exits") { clearInterval(exitTimer); exitTimer = null; return; }
+  try { const st = await api("/v1/exits/status"); state.exits = {...(state.exits||{}), ...st}; if (!st.connected) delete state.exits.connected; if (!state.exitBusy || state.exitConnecting) render(); } catch(e) {}
+}, 5000); }
+async function exitBuy(id) {
+  const hours = Number(($("#hours-"+id)||{}).value||1), asset = ($("#asset-"+id)||{}).value||"usdc";
+  state.exitDraft = {...(state.exitDraft||{}), ["h"+id]: hours};
+  const x = state.exits || {}, now = Math.floor(Date.now()/1000);
+  const from = Math.max(now, ...((x.leases||[]).filter(l => l.listingId===id && l.end>now).map(l => l.end)));
+  state.err = ""; state.exitConfirm = {kind:"buy", listingId:id, hours, asset, newEnd: from + hours*3600}; render();
+  try { const q = await api("/v1/exits/quote", {method:"POST", body: JSON.stringify({listingId:id, hours, asset})}); state.exitConfirm = {...state.exitConfirm, price:q.price, asset:q.asset}; }
+  catch(e) { state.err = e.message; state.exitConfirm = null; }
+  render();
+}
+async function exitPay() {
+  const q = state.exitConfirm; if (!q || !q.price) return;
+  state.exitConfirm = null; state.err = "";
+  state.exitBusy = q.kind==="topup" ? `Adding 1 hour for ${q.price}… (paying on-chain; you stay connected)` : `Buying ${q.hours} hour(s) on exit #${q.listingId} for ${q.price}… (approve and pay on-chain)`; render();
+  try {
+    if (q.kind==="topup") await api("/v1/exits/topup", {method:"POST", body: JSON.stringify({hours:q.hours, asset:q.asset})});
+    else await api("/v1/exits/buy", {method:"POST", body: JSON.stringify({listingId:q.listingId, hours:q.hours, asset:q.asset})});
+    await loadExits();
+  } catch(e) { state.err = e.message; }
+  state.exitBusy = ""; render();
+}
+async function exitConnect(id) {
+  state.err = ""; state.exitConnecting = true; state.exitBusy = `Connecting to exit #${id}… (the first path can take up to a minute; then up to 30 seconds for this computer's routes)`; render();
+  try { await api("/v1/exits/connect", {method:"POST", body: JSON.stringify({listingId:id})}); await loadExits(); }
+  catch(e) { state.err = e.message; }
+  state.exitConnecting = false; state.exitBusy = ""; render();
+}
+
+const screens = {
+  welcome, unlock, "create-show": createShow, confirm: confirmWords,
+  password: () => setPassword("create"), restore: () => setPassword("restore"),
+  home, swap: swapForm, "confirm-swap": confirmSwap, "confirm-satchel": confirmSatchel, progress, history, settings, search, exits: exitsScreen
+};
+
+function render() {
+  const el = $("#app");
+  const fn = screens[state.screen] || welcome;
+  el.innerHTML = fn();
+  const wrote = $("#wrote");
+  if (wrote) wrote.addEventListener("change", () => { const c=$("#cont"); if(c) c.disabled = !wrote.checked; });
+  el.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => go(b.dataset.go, b.dataset.id)));
+  el.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => act(b.dataset.act)));
+  el.querySelectorAll("[data-tag]").forEach(b => b.addEventListener("click", async () => {
+    state.searchQ = {...(state.searchQ||{}), tag: b.dataset.tag}; state.err = "";
+    try { await runSearch(); } catch(e) { state.err = e.message; } render(); }));
+  const sqi = $("#sq");
+  if (sqi) sqi.addEventListener("keydown", ev => { if (ev.key === "Enter") act("do-search"); });
+  el.querySelectorAll("[data-copy]").forEach(b => b.addEventListener("click", () => copy(b.dataset.copy)));
+  el.querySelectorAll("[data-exit-buy]").forEach(b => b.addEventListener("click", () => exitBuy(Number(b.dataset.exitBuy))));
+  el.querySelectorAll("[data-exit-connect]").forEach(b => b.addEventListener("click", () => exitConnect(Number(b.dataset.exitConnect))));
+}
+
+async function go(name, id) {
+  state.err = "";
+  try {
+    if (name === "create") {
+      const j = await api("/v1/onboard/start", {method:"POST", body:"{}"});
+      state.words = j.words; state.checks = j.checks; state.screen = "create-show";
+    } else if (name === "progress") {
+      if (id) state.swapId = id;
+      await refreshSwap();
+      state.screen = "progress";
+      startPoll();
+    } else if (name === "home") {
+      await refreshBalances();
+      state.screen = "home";
+    } else if (name === "history") {
+      const j = await api("/v1/swaps");
+      state.swaps = j.swaps||[];
+      state.screen = "history";
+    } else if (name === "search") {
+      state.screen = "search";
+      await runSearch();
+    } else if (name === "exits") {
+      state.screen = "exits";
+      await loadExits();
+      startExitPoll();
+    } else if (name === "settings") {
+      state.settings = await api("/v1/settings");
+      state.screen = "settings";
+    } else if (name === "create-show") {
+      state.screen = "create-show";
+    } else {
+      state.screen = name;
+    }
+  } catch(e) { state.err = e.message; }
+  render();
+}
+
+async function act(name) {
+  state.err = "";
+  try {
+    if (name === "unlock") {
+      const pw = $("#pw").value;
+      await api("/v1/wallet/unlock", {method:"POST", body: JSON.stringify({password: pw})});
+      await boot();
+      return;
+    }
+    if (name === "lock") {
+      await api("/v1/wallet/lock", {method:"POST", body:"{}"});
+      stopPoll();
+      await boot();
+      return;
+    }
+    if (name === "to-password") {
+      const answers = {};
+      document.querySelectorAll("[data-word]").forEach(i => answers[i.dataset.word] = i.value.trim().toLowerCase());
+      state.answers = answers;
+      // Quick local check against displayed words if we still have them
+      const words = state.words || [];
+      for (const [n, v] of Object.entries(answers)) {
+        const want = words[Number(n)-1];
+        if (want && v !== want) { state.err = "Word "+n+" is not right. Look at the backup again."; render(); return; }
+      }
+      state.screen = "password";
+    }
+    if (name === "do-create") {
+      const pw1 = $("#pw1").value, pw2 = $("#pw2").value;
+      if (pw1 !== pw2) { state.err = "The two passwords do not match."; render(); return; }
+      await api("/v1/onboard/confirm", {method:"POST", body: JSON.stringify({password: pw1, words: state.answers})});
+      await boot();
+      return;
+    }
+    if (name === "do-restore") {
+      const pw1 = $("#pw1").value, pw2 = $("#pw2").value, mn = $("#mn").value;
+      if (pw1 !== pw2) { state.err = "The two passwords do not match."; render(); return; }
+      await api("/v1/wallet/restore", {method:"POST", body: JSON.stringify({password: pw1, mnemonic: mn})});
+      await boot();
+      return;
+    }
+    if (name === "get-quote") {
+      const amt = $("#eth-amt").value;
+      const asset = ($("#asset") && $("#asset").value) || "eth";
+      state.draft = {eth: amt, asset};
+      const q = asset === "usdc" ? "usdc=" : "eth=";
+      state.quote = null; state.quoteFail = null;
+      try { state.quote = await api("/v1/quote?"+q+encodeURIComponent(amt)); }
+      catch(e) { if (e.body && e.body.quotes) state.quoteFail = e.body; throw e; }
+    }
+    if (name === "do-search") {
+      state.searchQ = {...(state.searchQ||{}), q: $("#sq").value};
+      await runSearch();
+    }
+    if (name === "confirm-swap") { state.screen = "confirm-swap"; }
+    if (name === "start-swap") {
+      const q = state.quote;
+      const body = {value: q.value, minXmr: q.xmrPico, asset: q.asset, listingId: q.listingId||0};
+      const j = await api("/v1/swaps", {method:"POST", body: JSON.stringify(body)});
+      state.swap = j; state.swapId = j.id; state.screen = "progress";
+      startPoll();
+    }
+    if (name === "satchel-approve") {
+      const p = (state.status && state.status.pending) || {};
+      const j = await api("/v1/satchel/approve", {method:"POST", body: JSON.stringify({id: p.id})});
+      state.swap = j; state.swapId = j.id; state.screen = "progress";
+      startPoll();
+    }
+    if (name === "satchel-reject") {
+      await api("/v1/satchel/reject", {method:"POST", body: JSON.stringify({})});
+      state.status = await api("/v1/status");
+      state.screen = "home";
+    }
+    if (name === "save-settings") {
+      const tr = document.querySelector('input[name="transport"]:checked');
+      await api("/v1/settings", {method:"PUT", body: JSON.stringify({
+        makerUrl: $("#maker").value, makerSeshUrl: $("#maker-sesh").value, transport: tr ? tr.value : "",
+        ...($("#exit-rpc") ? {exitRouterRpc: $("#exit-rpc").value.trim()} : {})})});
+      state.settings = await api("/v1/settings");
+      state.status = await api("/v1/status");
+    }
+    if (name === "exit-topup") {
+      const c = (state.exits||{}).connected || {};
+      state.exitConfirm = {kind:"topup", listingId:c.listingId, hours:1}; render();
+      try { const q = await api("/v1/exits/quote", {method:"POST", body: JSON.stringify({hours:1})}); state.exitConfirm = {...state.exitConfirm, price:q.price, asset:q.asset, newEnd:q.newEnd}; }
+      catch(e) { state.exitConfirm = null; throw e; }
+    }
+    if (name === "exit-confirm-pay") { await exitPay(); return; }
+    if (name === "exit-confirm-cancel") { state.exitConfirm = null; }
+    if (name === "exit-disconnect") {
+      await api("/v1/exits/disconnect", {method:"POST", body:"{}"});
+      await loadExits();
+    }
+    if (name === "faucet-claim") {
+      state.faucet = null; state.faucetBusy = true; render();
+      try {
+        state.faucet = await api("/v1/faucet/claim", {method:"POST", body:"{}"});
+        try { state.balances = await api("/v1/balances"); } catch(e) {}
+      } catch(e) { state.faucet = {ok:false, message: e.message}; }
+      finally { state.faucetBusy = false; }
+    }
+    if (name === "show-backup") {
+      const j = await api("/v1/wallet/backup", {method:"POST", body: JSON.stringify({password: $("#pw-bak").value})});
+      state.backupWords = j.words;
+    }
+  } catch(e) { state.err = e.message; }
+  render();
+}
+
+let pollTimer;
+function startPoll(){ stopPoll(); pollTimer = setInterval(refreshSwap, 4000); }
+function stopPoll(){ if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+async function refreshSwap() {
+  if (!state.swapId) return;
+  try {
+    state.swap = await api("/v1/swaps/"+state.swapId);
+    state.status = await api("/v1/status");
+    if (state.screen === "progress") render();
+  } catch(e) {}
+}
+async function refreshBalances() {
+  try { state.balances = await api("/v1/balances"); } catch(e) { state.balances = {ethError: e.message}; }
+}
+
+// Keep the connection line fresh without re-rendering the page.
+setInterval(async () => {
+  if (!state.status || state.status.state !== "unlocked") return;
+  try {
+    const st = await api("/v1/status");
+    state.status.connection = st.connection;
+    const el = document.getElementById("conn");
+    if (el) el.innerHTML = connLine(st);
+  } catch(e) {}
+}, 1500);
+
+async function boot() {
+  state.err = "";
+  state.status = await api("/v1/status");
+  const st = state.status.state;
+  if (st === "new") { state.screen = "welcome"; }
+  else if (st === "locked") { state.screen = "unlock"; }
+  else {
+    await refreshBalances();
+    if (state.status.openId) { state.swapId = state.status.openId; state.screen = "progress"; await refreshSwap(); startPoll(); }
+    else if (state.status.pending) { state.screen = "confirm-satchel"; }
+    else state.screen = "home";
+  }
+  render();
+}
+boot().catch(e => { state.err = e.message; state.screen = "welcome"; render(); });
+</script>
+</body>
+</html>

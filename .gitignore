@@ -1,0 +1,14 @@
+.monero/
+contracts/out/
+contracts/cache/
+.secrets/
+.env
+*.keys
+.~lock.*
+swapd/bin/
+*.enc
+.swapd/
+.monero
+contracts/foundry.lock
+.build/
+dist/release/

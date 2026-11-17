@@ -1,0 +1,34 @@
+NOTICE — third-party code and material in this repository
+
+Our own code (contracts/src, contracts/test, swapd, scripts, seller-kit, packaging, docs) is under the
+MIT License in LICENSE. It is test-only, unaudited software: do not use it with
+real money.
+
+Third-party code that is built or linked:
+
+  forge-std v1.11.0            contracts/lib/forge-std (git submodule, tests only)
+                               MIT OR Apache-2.0 — see its LICENSE-MIT / LICENSE-APACHE
+  filippo.io/edwards25519      Go module, linked into swapd — BSD-3-Clause
+  github.com/decred/dcrd/dcrec/secp256k1/v4
+                               Go module, linked into swapd — ISC
+  golang.org/x/crypto, golang.org/x/sys
+                               Go modules, linked into swapd — BSD-3-Clause
+  (license texts are in each module's source, e.g. `go mod download -json`)
+
+Third-party binaries shipped in this repository:
+
+  dist/session-router-srnetx6/  Session Router 1.1.1 (modified build) and its
+                               libsessionrouter packages — GPL-3.0. Source for
+                               this exact build: see SOURCE in that directory
+                               (https://github.com/carlcrainellc/session-router/tree/seshswap/router-1.1.1-srnetx6).
+
+The Linux release tarball also contains the official Monero CLI
+monero-wallet-rpc (BSD-3-Clause) and Ubuntu runtime libraries; see
+packaging/linux/THIRD-PARTY-NOTICES.txt.
+
+Monero binaries used by the local tests are downloaded at setup time
+(scripts/setup.sh) from getmonero.org and are not part of this repository.
+
+Design credits (ideas, no code): AthanorLabs/atomic-swap (two-timeout protocol),
+Gugger, ePrint 2020/1126 (Bitcoin–Monero swaps), eigenwallet / xmr-btc-swap
+(ASB maker model).

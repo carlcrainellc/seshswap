@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Satchel stand-in (test only)</title>
+<style>
+  :root { --bg:#0f1410; --card:#18201a; --ink:#e8f0ea; --muted:#8aa090; --line:#2a3a2e; --mint:#6ee7a8; --warn:#f0c36e; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 16px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  main { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  .lead { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  label { font-size: 13px; color: var(--muted); }
+  input, select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: #101610; color: var(--ink); }
+  button { background: var(--mint); color: #0b120e; border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .quote { background: #101610; border-radius: 8px; padding: 12px; }
+  .err { color: #f0a0a0; }
+  .ok { color: var(--mint); }
+  a { color: var(--mint); }
+</style>
+<main>
+  <h1>Satchel stand-in</h1>
+  <p class="lead">This is a test page that stands in for Satchel. It can ask the wallet for a quote and propose a trade. The trade only starts if you approve it in the wallet. Satchel cannot skip that step.</p>
+  <div class="card">
+    <div><label>Wallet address</label>
+      <input id="wallet" value="http://127.0.0.1:7676"></div>
+    <div><label>You sell</label>
+      <div style="display:flex;gap:8px">
+        <select id="asset" style="flex:0 0 100px"><option value="eth">ETH</option><option value="usdc">USDC</option></select>
+        <input id="amt" placeholder="0.002" value="0.002" style="flex:1">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="ghost" id="btn-quote">Get a quote</button>
+      <button id="btn-propose">Send to the wallet for approval</button>
+    </div>
+    <div id="out"></div>
+    <p class="lead">Open the wallet at <a id="wlink" href="http://127.0.0.1:7676/" target="_blank">http://127.0.0.1:7676/</a> to approve or reject.</p>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+function wallet() { return $("wallet").value.replace(/\/$/, ""); }
+$("wallet").addEventListener("input", () => { $("wlink").href = wallet()+"/"; $("wlink").textContent = wallet()+"/"; });
+async function api(path, opt) {
+  const r = await fetch(wallet()+path, Object.assign({headers:{"Content-Type":"application/json"}}, opt||{}));
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+$("btn-quote").onclick = async () => {
+  $("out").innerHTML = "";
+  try {
+    const asset = $("asset").value, amt = $("amt").value;
+    const q = await api("/v1/quote?"+ (asset==="usdc"?"usdc=":"eth=") + encodeURIComponent(amt));
+    window._quote = q;
+    $("out").innerHTML = `<div class="quote">Quote: you sell <b>${q.valueLabel||amt}</b> and buy at least <b>${q.xmr} XMR</b>. This page cannot lock funds.</div>`;
+  } catch(e) { $("out").innerHTML = `<div class="err">${e.message}</div>`; }
+};
+$("btn-propose").onclick = async () => {
+  try {
+    const asset = $("asset").value, amt = $("amt").value, q = window._quote || {};
+    const body = {asset, minXmr: q.xmrPico||0, value: q.value};
+    if (asset==="usdc") body.usdc = amt; else body.eth = amt;
+    const j = await api("/v1/satchel/propose", {method:"POST", body: JSON.stringify(body)});
+    $("out").innerHTML = `<div class="ok">${j.message||"Waiting for approval in the wallet."} Proposal ${j.id}.</div>
+      <p>Open the wallet to approve. If you close this page, the proposal stays in the wallet until you reject it.</p>`;
+  } catch(e) { $("out").innerHTML = `<div class="err">${e.message}</div>`; }
+};
+</script>
