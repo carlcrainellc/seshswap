@@ -30,7 +30,8 @@ type regState struct {
 	c        *eth.Client
 	lastSync time.Time
 	syncErr  string
-	port     string // tests only: ":port" appended to listed .sesh names
+	port     string          // tests only: ":port" appended to listed .sesh names
+	assets   map[string]bool // which assets the listed makers take, from their offers (guarded by Server.mu)
 }
 
 func (s *Server) seshURL(sesh string) string { return "http://" + sesh + s.reg.port }
@@ -287,7 +288,52 @@ func (s *Server) askRegistryMakers(ctx context.Context, wantUSDC bool, val *big.
 		}(m)
 	}
 	wg.Wait()
+	s.noteAssets(out)
 	return out, nil
+}
+
+func assetReason(wantUSDC bool) string {
+	if wantUSDC {
+		return "takes ETH only, not USDC"
+	}
+	return "takes USDC only, not ETH"
+}
+
+// noteAssets remembers which assets the listed makers take, from the offers
+// seen while quoting, so the swap screen can stop offering one nobody takes.
+func (s *Server) noteAssets(qs []*makerQuote) {
+	seen := map[string]bool{}
+	any := false
+	for _, q := range qs {
+		if q.seen == nil {
+			continue
+		}
+		any = true
+		if q.seen.Asset.IsZero() {
+			seen["eth"] = true
+		} else {
+			seen["usdc"] = true
+		}
+	}
+	if !any {
+		return
+	}
+	s.mu.Lock()
+	s.reg.assets = map[string]bool{"eth": seen["eth"], "usdc": seen["usdc"]}
+	s.mu.Unlock()
+}
+
+// noMakerTakes is true when the makers' offers are known and none takes the asset.
+func (s *Server) noMakerTakes(wantUSDC bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reg.assets == nil {
+		return false
+	}
+	if wantUSDC {
+		return !s.reg.assets["usdc"]
+	}
+	return !s.reg.assets["eth"]
 }
 
 // fillQuote asks one maker and runs the asset and fair-price checks.
@@ -301,6 +347,10 @@ func (s *Server) fillQuote(ctx context.Context, mq *makerQuote, wantUSDC bool, v
 		if getJSON(ctx, s.http, base+"/v1/offer", &o) == nil {
 			mq.seen = &o
 		}
+		if mq.seen != nil && wantUSDC != !mq.seen.Asset.IsZero() {
+			mq.Reason = assetReason(wantUSDC)
+			return
+		}
 		if r := rangeReason(mq.seen, val); r != "" {
 			mq.Reason, mq.outRange = r, true
 		}
@@ -313,11 +363,7 @@ func (s *Server) fillQuote(ctx context.Context, mq *makerQuote, wantUSDC bool, v
 	}
 	mq.terms, mq.offer, mq.seen = &terms, &offer, &offer
 	if wantUSDC != !offer.Asset.IsZero() {
-		if wantUSDC {
-			mq.Reason = "offers ETH, not USDC"
-		} else {
-			mq.Reason = "offers USDC, not ETH"
-		}
+		mq.Reason = assetReason(wantUSDC)
 		return
 	}
 	if offer.Contract != s.Cfg.Contract {
@@ -329,6 +375,18 @@ func (s *Server) fillQuote(ctx context.Context, mq *makerQuote, wantUSDC bool, v
 		return
 	}
 	mq.XMRPico, mq.XMR = terms.XMR, picoToXMR(terms.XMR)
+	// The same timeout and confirmation checks the swap itself runs, so a
+	// quote the wallet would refuse at confirm time is never offered.
+	s.mu.Lock()
+	eng := s.eng
+	s.mu.Unlock()
+	if eng != nil {
+		var te api.TermsError
+		if _, err := api.CheckTerms(ctx, eng, takeLimits(eng.Policy, val), terms.D1, terms.D2, terms.MinConfs, terms.XMR, terms.Grace, terms.Premium); errors.As(err, &te) {
+			mq.Reason = "its swap terms don't meet this wallet's safety limits: " + err.Error()
+			return
+		}
+	}
 	asset := "ETH"
 	if wantUSDC {
 		asset = "USDC"
@@ -534,4 +592,55 @@ func regView(r swap.Record, explorer string) map[string]any {
 		out["text"] = "Bonded maker #" + strconv.FormatUint(l.ListingID, 10) + ". Its commitment is recorded right after your ETH lock."
 	}
 	return out
+}
+
+// takeLimits are the taker's own limits for a swap of val, used both when
+// checking quotes and when starting a swap.
+func takeLimits(pol swap.Policy, val *big.Int) api.TakeParams {
+	return api.TakeParams{Value: val, MinD1: 2*pol.Margin + 1800, MinD2: 2 * pol.Margin,
+		MaxConfs: 60, MinConfs: swap.XmrConfFloor}
+}
+
+// swapAssets reads each listed maker's offer (no quote) and says which assets
+// can be swapped right now: {"eth": true, "usdc": false}.
+func (s *Server) swapAssets(w http.ResponseWriter, r *http.Request) {
+	if s.vault == nil {
+		writeErr(w, 401, "unlock the wallet first")
+		return
+	}
+	if !s.regEnabled() || !isPrivate(s.curMode()) {
+		writeJSON(w, 200, map[string]any{"known": false})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	ix, err := s.regIndex(ctx, 15*time.Second)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"known": false, "error": err.Error()})
+		return
+	}
+	makers := ix.Makers()
+	qs := make([]*makerQuote, len(makers))
+	var wg sync.WaitGroup
+	for i, m := range makers {
+		qs[i] = &makerQuote{URL: s.seshURL(m.Sesh)}
+		wg.Add(1)
+		go func(mq *makerQuote) {
+			defer wg.Done()
+			var o api.Offer
+			if getJSON(ctx, s.http, strings.TrimRight(mq.URL, "/")+"/v1/offer", &o) == nil && o.Contract == s.Cfg.Contract {
+				mq.seen = &o
+			}
+		}(qs[i])
+	}
+	wg.Wait()
+	s.noteAssets(qs)
+	s.mu.Lock()
+	a := s.reg.assets
+	s.mu.Unlock()
+	if a == nil {
+		writeJSON(w, 200, map[string]any{"known": false})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"known": true, "eth": a["eth"], "usdc": a["usdc"]})
 }

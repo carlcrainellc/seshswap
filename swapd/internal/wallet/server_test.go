@@ -140,7 +140,7 @@ func TestOnboardCreateUnlockAndBackup(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "Swap wallet") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "<title>SeshSwap</title>") {
 		t.Fatalf("ui %d", w.Code)
 	}
 

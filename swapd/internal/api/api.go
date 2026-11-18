@@ -443,20 +443,10 @@ func Take(ctx context.Context, e *swap.Engine, p TakeParams) (*swap.Record, erro
 	if err != nil {
 		return nil, err
 	}
-	confs := max(resp.MinConfs, p.MinConfs, swap.XmrConfs(resp.XMR, e.ReorgDepth(ctx)))
-	bs, err := e.BlockSecs(ctx)
+	confs, err := CheckTerms(ctx, e, p, resp.D1, resp.D2, resp.MinConfs, resp.XMR, resp.Grace, resp.Premium)
 	if err != nil {
 		return nil, err
 	}
-	maxGrace := p.MaxGrace
-	if maxGrace == 0 {
-		maxGrace = 12 * 3600
-	}
-	pbps := p.MaxPremiumBps
-	if pbps == 0 {
-		pbps = 100
-	}
-	maxPremium := new(big.Int).Div(new(big.Int).Mul(p.Value, new(big.Int).SetUint64(pbps)), big.NewInt(10000))
 	switch {
 	case resp.ID != session:
 		return nil, errors.New("maker changed the session id")
@@ -464,16 +454,6 @@ func Take(ctx context.Context, e *swap.Engine, p TakeParams) (*swap.Record, erro
 		return nil, errors.New("no claimer address")
 	case resp.XMR < p.MinXMR:
 		return nil, fmt.Errorf("quote %d piconero is below our minimum %d", resp.XMR, p.MinXMR)
-	case resp.D1 < p.MinD1 || resp.D2 < p.MinD2:
-		return nil, errors.New("maker's timeouts are shorter than our minimums")
-	case resp.MinConfs > p.MaxConfs:
-		return nil, errors.New("unacceptable confirmation count")
-	case resp.D1 < 2*e.Policy.Margin+swap.ConfirmSecs(confs, bs)+300:
-		return nil, fmt.Errorf("t1 too short for our safety margin and %d confirmations", confs)
-	case resp.Grace < max(e.Policy.MinGrace, swap.ContractMinGrace) || resp.Grace > maxGrace:
-		return nil, fmt.Errorf("intent freeze %ds outside our range [%d, %d]", resp.Grace, max(e.Policy.MinGrace, swap.ContractMinGrace), maxGrace)
-	case resp.Premium == nil || resp.Premium.Sign() < 0 || resp.Premium.Cmp(maxPremium) > 0:
-		return nil, fmt.Errorf("premium %v above our limit %v", resp.Premium, maxPremium)
 	case resp.Expires != 0 && time.Now().Unix() >= resp.Expires:
 		return nil, errors.New("quote already expired")
 	}
@@ -545,3 +525,44 @@ func NotifyLocked(id, makerURL string, tx eth.Hash) {
 	_ = postJSON(ctx, httpClient(20*time.Second), makerURL+"/v1/swaps/"+id+"/locked",
 		map[string]any{"txHash": tx}, nil)
 }
+
+// CheckTerms runs the taker's checks on a maker's timeouts, confirmations,
+// intent freeze and premium. Take runs it on the maker's answer; the wallet
+// also runs it on quotes, so a quote it would refuse is never shown as usable.
+// It returns the Monero confirmations the swap will wait for.
+func CheckTerms(ctx context.Context, e *swap.Engine, p TakeParams, d1, d2, minConfs, xmr, grace uint64, premium *big.Int) (uint64, error) {
+	confs := max(minConfs, p.MinConfs, swap.XmrConfs(xmr, e.ReorgDepth(ctx)))
+	bs, err := e.BlockSecs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	maxGrace := p.MaxGrace
+	if maxGrace == 0 {
+		maxGrace = 12 * 3600
+	}
+	pbps := p.MaxPremiumBps
+	if pbps == 0 {
+		pbps = 100
+	}
+	maxPremium := new(big.Int).Div(new(big.Int).Mul(p.Value, new(big.Int).SetUint64(pbps)), big.NewInt(10000))
+	minGrace := max(e.Policy.MinGrace, swap.ContractMinGrace)
+	switch {
+	case d1 < p.MinD1 || d2 < p.MinD2:
+		return 0, TermsError{fmt.Sprintf("maker's timeouts are shorter than our minimums (%d s and %d s; we need %d s and %d s)", d1, d2, p.MinD1, p.MinD2)}
+	case minConfs > p.MaxConfs:
+		return 0, TermsError{"unacceptable confirmation count"}
+	case d1 < 2*e.Policy.Margin+swap.ConfirmSecs(confs, bs)+300:
+		return 0, TermsError{fmt.Sprintf("t1 too short for our safety margin and %d confirmations", confs)}
+	case grace < minGrace || grace > maxGrace:
+		return 0, TermsError{fmt.Sprintf("intent freeze %ds outside our range [%d, %d]", grace, minGrace, maxGrace)}
+	case premium == nil || premium.Sign() < 0 || premium.Cmp(maxPremium) > 0:
+		return 0, TermsError{fmt.Sprintf("premium %v above our limit %v", premium, maxPremium)}
+	}
+	return confs, nil
+}
+
+// TermsError is a maker's terms failing the taker's limits (as opposed to the
+// check itself not being able to run).
+type TermsError struct{ Msg string }
+
+func (e TermsError) Error() string { return e.Msg }

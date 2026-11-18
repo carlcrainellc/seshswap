@@ -239,3 +239,39 @@ func (s *Server) faucetClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, res)
 }
+
+// faucetStatus passes on the faucet's public /api/status: which coins it can
+// send right now, so the wallet can say so before anyone presses the button.
+func (s *Server) faucetStatus(w http.ResponseWriter, r *http.Request) {
+	base := s.faucetURL()
+	if base == "" {
+		writeErr(w, 404, "no faucet for this network")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/status", nil)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	req.Header.Set("X-SeshSwap-Client", FaucetClient())
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		writeErr(w, 502, "the faucet did not answer")
+		return
+	}
+	defer resp.Body.Close()
+	var st map[string]any
+	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&st) != nil {
+		writeErr(w, 502, "the faucet did not answer")
+		return
+	}
+	out := map[string]any{}
+	for _, c := range []string{"eth", "usdc", "xmr"} {
+		if m, ok := st[c].(map[string]any); ok {
+			out[c] = map[string]any{"amount": m["amount"], "available": m["available"] == true, "note": m["note"]}
+		}
+	}
+	writeJSON(w, 200, out)
+}

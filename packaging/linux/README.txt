@@ -16,6 +16,9 @@ Private swaps (once)
 Swaps reach the XMR seller over Session Router. It needs permission to make
 its own network adapter. Run this once (it asks for your password):
   ./seshswap setup-router
+If your account can't use sudo, run ./seshswap check once, then someone
+who can runs this in the folder:
+  sudo setcap cap_net_admin+ep session-router/bin/session-router
 The router still runs as you, not root. Balances and Get test coins work
 without this step. If you move the folder, run it again.
 

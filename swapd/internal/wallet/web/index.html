@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="wallet-token" content="">
-<title>Swap wallet</title>
+<title>SeshSwap</title>
+<link rel="icon" href="data:,">
 <style>
   :root {
     --bg: #0c1017;
@@ -151,7 +152,7 @@ function shell(main, {nav}={}) {
   const navItem = (id, label) => `<button class="navbtn ${nav===id?"on":""}" data-go="${id}">${label}</button>`;
   return `
   ${unlocked ? `<aside class="sidebar">
-    <div class="brand"><i></i> Swap wallet</div>
+    <div class="brand"><i></i> SeshSwap</div>
     ${navItem("home","Balances")}
     ${navItem("swap","Swap")}
     ${navItem("search","Directory")}
@@ -176,7 +177,7 @@ function shell(main, {nav}={}) {
 
 function welcome() {
   return `<div class="center">
-    <div class="brand" style="margin-bottom:24px"><i></i> Swap wallet</div>
+    <div class="brand" style="margin-bottom:24px"><i></i> SeshSwap</div>
     <h1 class="h1">Swap ETH for Monero, without giving anyone your money.</h1>
     <p class="lead">A non-custodial wallet for ETH, USDC and XMR. If a trade goes wrong, your ETH is returned automatically. This build is for testnets only, and it is not audited.</p>
     <div class="actions">
@@ -237,28 +238,31 @@ function setPassword(mode) {
     ${err()}
     <div class="actions">
       <button class="btn ghost" data-go="${mode==="restore"?"welcome":"confirm"}">Back</button>
-      <button class="btn" data-act="${mode==="restore"?"do-restore":"do-create"}" data-testid="save">Save and open</button>
+      <button class="btn" data-act="${mode==="restore"?"do-restore":"do-create"}" data-testid="save" ${state.saving?"disabled":""}>${state.saving ? "Opening your wallet…" : "Save and open"}</button>
     </div>
+    ${state.saving ? `<div class="a" data-testid="saving">Setting up your ETH and Monero wallets. The first time takes up to a minute.</div>` : ""}
   </div></div>`;
 }
 
 function home() {
   const b = state.balances || {};
   const st = state.status || {};
-  const cell = (k, v, addr, err) => `<div class="bal"><div class="k">${k}</div>
-    <div class="v" data-testid="bal-${k}">${esc(v ?? "—")}</div>
+  const cell = (k, v, addr, err, extra) => `<div class="bal"><div class="k">${k}</div>
+    <div class="v" data-testid="bal-${k}">${esc(v ?? (state.balances ? "—" : "…"))}</div>
+    ${extra || ""}
     ${err ? `<div class="${k==="USDC"?"a":"err"}">${esc(err)}</div>` : ""}
     ${addr ? `<div class="a mono">${esc(addr)} <button class="copy" data-copy="${esc(addr)}">Copy</button></div>` : ""}</div>`;
+  const xmrLock = b.xmrLocked ? `<div class="a" data-testid="xmr-locked">${esc(b.xmrLocked)} XMR is still locked. Spendable in about ${esc(b.xmrUnlockMins)} min.</div>` : "";
   return shell(`
     <h1 class="h1">Balances</h1>
     <p class="lead">${esc(st.network||"")} · Test only. Not audited.</p>
     <div class="row">
       ${cell("ETH", b.eth, b.ethAddress, b.ethError)}
-      ${cell("USDC", b.usdc ?? "0", b.usdcAddress, b.usdcError || b.usdcNote)}
-      ${cell("XMR", b.xmr, b.xmrAddress, b.xmrError)}
+      ${cell("USDC", b.usdc ?? (state.balances ? "0" : undefined), "", b.usdcError || b.usdcNote, `<div class="a">Uses your ETH address.</div>`)}
+      ${cell("XMR", b.xmr, b.xmrAddress, b.xmrError, xmrLock)}
     </div>
     <div class="actions"><button class="btn big" data-go="swap" data-testid="go-swap">Swap</button>
-      ${st.faucet ? `<button class="btn ghost" data-act="faucet-claim" data-testid="faucet-claim" ${state.faucetBusy?"disabled":""}>${state.faucetBusy ? "Getting test coins…" : "Get test coins"}</button>` : ""}</div>
+      ${st.faucet ? `<button class="btn ghost" data-act="faucet-claim" data-testid="faucet-claim" ${state.faucetBusy||faucetEmpty()?"disabled":""}>${state.faucetBusy ? "Getting test coins…" : "Get test coins"}</button>` : ""}</div>
     ${st.faucet ? faucetBox() : ""}
   `, {nav:"home"});
 }
@@ -266,13 +270,31 @@ function home() {
 function faucetBox() {
   if (state.faucetBusy) return `<div class="a" data-testid="faucet-busy">Asking the testnet faucet. Your computer does a few seconds of work first, instead of a captcha.</div>`;
   const f = state.faucet;
-  if (!f) return `<div class="a">Free test ETH, mock USDC and stagenet XMR, sent to this wallet. One claim a day.</div>`;
+  if (!f) return `<div class="a">Free test ETH, mock USDC and stagenet XMR, sent to this wallet. One claim a day.</div>${faucetToday()}`;
   const rows = (f.payouts||[]).map(p => `<li data-testid="faucet-${esc(p.coin.toLowerCase())}">${p.tx
       ? `${esc(p.amount)} ${esc(p.coin)}: sent${p.txUrl ? ` · <a href="${esc(p.txUrl)}" target="_blank" rel="noopener">transaction</a>` : ""}`
       : `${esc(p.coin)}: ${esc(p.note || "not sent")}`}</li>`).join("");
   return `<div class="card" data-testid="faucet-result" style="margin-top:12px">
     <div class="${f.ok ? "" : "err"}">${esc(f.message||"")}</div>
     ${rows ? `<ul style="margin:8px 0 0;padding-left:18px">${rows}</ul>` : ""}</div>`;
+}
+
+function faucetEmpty() {
+  const fs = state.faucetStatus;
+  return !!fs && ["eth","usdc","xmr"].every(c => !fs[c] || !fs[c].available);
+}
+function faucetToday() {
+  const fs = state.faucetStatus;
+  if (!fs) return "";
+  const names = {eth:"ETH", usdc:"USDC", xmr:"XMR"};
+  const out = Object.keys(names).filter(c => fs[c] && !fs[c].available).map(c => names[c]);
+  if (!out.length) return "";
+  if (faucetEmpty()) return `<div class="warnbox" data-testid="faucet-empty">The faucet is empty right now. Try again later.</div>`;
+  return `<div class="warnbox" data-testid="faucet-partial">The faucet is out of ${esc(out.join(" and "))} right now. A claim sends the rest; you can't claim again for a day.</div>`;
+}
+async function refreshFaucetStatus() {
+  if (!(state.status||{}).faucet) return;
+  try { state.faucetStatus = await api("/v1/faucet/status"); } catch(e) { state.faucetStatus = null; }
 }
 
 function fairPriceBox(q) {
@@ -302,12 +324,12 @@ function quotesBox(q) {
   if (!qs.length) return q && q.source === "configured" ? `<div class="a">From your configured maker.</div>` : "";
   const rows = qs.map(m => `<tr class="${m.best?"best":""}" data-testid="maker-quote">
     <td>#${esc(m.listingId)}<div class="a mono">${esc(short(m.sesh))}</div></td>
-    <td>${m.bondEth ? esc(m.bondEth)+" ETH" : "—"}<div class="a">cap ${m.maxEth ? esc(m.maxEth)+" ETH" : "—"}</div></td>
+    <td>${m.bondEth ? esc(m.bondEth)+" ETH" : "—"}<div class="a">up to ${m.maxEth ? esc(m.maxEth)+" ETH" : "—"}</div></td>
     <td>${m.ok ? esc(m.xmr)+" XMR" : "—"}${m.ok && m.offBps ? `<div class="a">${(m.offBps/100).toFixed(1)}% from feed</div>` : ""}</td>
     <td class="why">${m.best ? "Best quote" : m.ok ? "OK" : esc(m.reason||"")}<div class="a">${(m.ms/1000).toFixed(1)} s</div></td></tr>`).join("");
-  return `<div><label>Makers asked (registry)</label><table class="q" data-testid="maker-quotes"><thead><tr><th>Maker</th><th>Bond</th><th>Quote</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>
+  return `<div><label>Makers asked</label><table class="q" data-testid="maker-quotes"><thead><tr><th>Maker</th><th>Bond</th><th>Quote</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     ${q.fallback ? `<div class="a">No bonded maker gave a usable quote, so this one is from your configured maker.</div>` : ""}
-    <div class="a">Each maker's bond is read on-chain. A maker can quote at most its bond × the registry's cap factor, and its quote must be close to the price feed.</div></div>`;
+    <div class="a">Each maker has put up a bond on-chain. A maker's largest swap is limited by its bond, and its price must be close to the price feed.</div></div>`;
 }
 
 function search() {
@@ -338,26 +360,39 @@ async function runSearch() {
   state.search = await api("/v1/registry/search?q="+encodeURIComponent(sq.q||"")+"&tag="+encodeURIComponent(sq.tag||""));
 }
 
+function usdcOK() {
+  const a = (state.status||{}).swapAssets;
+  return !a || a.usdc !== false;
+}
+async function loadSwapAssets() {
+  const st = state.status || {};
+  if (st.swapAssets) return;
+  try {
+    const a = await api("/v1/swap-assets");
+    if (a.known) { st.swapAssets = {eth: a.eth, usdc: a.usdc}; if (state.screen === "swap") render(); }
+  } catch(e) {}
+}
+
 function swapForm() {
   const q = state.quote;
   const d = state.draft || {};
   return shell(`
     <h1 class="h1">Swap</h1>
-    <p class="lead">You sell ETH or USDC and you buy XMR. The other direction comes later.</p>
+    <p class="lead">You sell ${usdcOK() ? "ETH or USDC" : "ETH"} and buy XMR. Selling XMR comes later.</p>
     <div class="card stack">
       <div><label>You sell</label>
         <div style="display:flex;gap:8px;align-items:center">
           <select id="asset" data-testid="asset" style="flex:0 0 auto">
             <option value="eth" ${d.asset!=="usdc"?"selected":""}>ETH</option>
-            <option value="usdc" ${d.asset==="usdc"?"selected":""}>USDC</option>
+            <option value="usdc" ${d.asset==="usdc"&&usdcOK()?"selected":""} ${usdcOK()?"":"disabled"}>${usdcOK()?"USDC":"USDC (no maker yet)"}</option>
           </select>
-          <input type="text" id="eth-amt" data-testid="eth-amt" placeholder="${d.asset==="usdc"?"5":"0.01"}" value="${esc(d.eth||"")}" style="flex:1">
+          <input type="text" id="eth-amt" data-testid="eth-amt" placeholder="${d.asset==="usdc"&&usdcOK()?"5":"0.002"}" value="${esc(d.eth||"")}" style="flex:1">
         </div>
       </div>
       <div class="actions"><button class="btn ghost" data-act="get-quote" data-testid="get-quote">Get a quote</button></div>
       ${state.quoteFail ? quotesBox(state.quoteFail) : ""}
       ${q ? `<div class="bal">
-        <div class="k">You buy${q.listingId ? ` · best of ${(q.quotes||[]).filter(x=>x.ok).length} bonded maker quote(s)` : ""}</div>
+        <div class="k">You buy</div>
         <div class="v">${esc(q.xmr)} XMR</div>
         <div class="a">Quote expires ${q.expires ? new Date(q.expires*1000).toLocaleString("en-US",{timeZone:"America/Chicago"})+" CT" : "soon"}.
           ${q.estReadySecs ? `Swap done in about ${Math.round(q.estReadySecs/60)} minutes.` : ""}
@@ -385,7 +420,7 @@ function confirmSwap() {
       <div class="bal"><div class="k">You buy at least</div><div class="v">${esc(q.xmr)} XMR</div></div>
       ${q.listingId ? `<div class="a" data-testid="confirm-maker">From bonded maker #${esc(q.listingId)} (${esc(short(q.sesh))}), bond ${esc(q.bondEth)} ETH. It signs a commitment that is recorded on-chain after your lock; if it doesn't acknowledge its XMR lock in time, part of its bond is paid to you.</div>` : ""}
       ${fairPriceBox(q)}
-      <p class="lead">This is the binding approval. Satchel, if you used it, cannot skip this step. After you confirm, your ${esc(q.asset||"ETH")} is locked in the contract until the swap finishes or is refunded.</p>
+      <p class="lead">This is the binding approval. After you confirm, your ${esc(q.asset||"ETH")} is locked in the contract until the swap finishes or is refunded.</p>
       <div class="refund">${q.estReadySecs ? `Swap done in about ${Math.round(q.estReadySecs/60)} minutes. ` : ""}If something goes wrong, your ${esc(q.asset||"ETH")} is returned automatically.</div>
       <div class="warnbox">Test only. Not audited.</div>
       ${err()}
@@ -509,11 +544,11 @@ function exitsScreen() {
         <input type="number" min="1" max="${e.maxHours}" value="${esc(d["h"+e.id]||1)}" id="hours-${e.id}" data-testid="exit-hours" style="width:70px"> h
         <select id="asset-${e.id}" data-testid="exit-asset">${e.usdcPerHour?`<option value="usdc">USDC</option>`:""}${e.ethPerHour?`<option value="eth">ETH</option>`:""}</select>
         <button class="btn ghost" data-exit-buy="${e.id}" data-testid="exit-buy">Buy</button></div>` : `<span class="a">${esc(e.why||"not for sale")}</span>`;
-    const conn = c && c.listingId===e.id ? (c.phase==="up" ? `<span class="chip on">connected</span>` : c.phase==="noroutes" ? `<span class="chip">routes not up</span>` : `<span class="chip">waiting for routes</span>`)
+    const conn = c && c.listingId===e.id ? (c.phase==="up" ? `<span class="chip on">connected</span>` : c.phase==="noroutes" ? `<span class="chip">routes not up</span>` : c.phase==="testing" ? `<span class="chip">testing</span>` : `<span class="chip">waiting for routes</span>`)
       : until ? `<button class="btn" data-exit-connect="${e.id}" data-testid="exit-connect">Connect</button><div class="a">paid until ${esc(ctTime(until))}</div>` : "";
     return `<tr data-testid="exit-row">
       <td>#${esc(e.id)}</td>
-      <td><div class="mono">${esc(short(e.sesh))}</div><div class="a">${info.country?"Country "+esc(info.country)+" · ":""}web only (ports 80 and 443)${info.dns?" · own DNS "+esc(info.dns):""}${info.note?" · "+esc(info.note):""}</div></td>
+      <td><div class="mono">${esc(short(e.sesh))}</div><div class="a">${info.country&&info.country!=="XX"?"Country "+esc(info.country)+" · ":""}web only (ports 80 and 443)${info.dns?" · own DNS "+esc(info.dns):""}${info.note?" · "+esc(info.note):""}</div></td>
       <td>${prices ? prices+" per hour" : "—"}${e.maxHours?`<div class="a">up to ${esc(e.maxHours)} h at a time · bond ${esc(e.bondEth)} ETH</div>`:""}</td>
       <td>${buy}</td><td>${conn}</td></tr>`;
   }).join("") || `<tr><td colspan="5" style="color:var(--muted)">${x.exits ? "No exits are listed yet." : "Loading…"}</td></tr>`;
@@ -547,6 +582,8 @@ function exitConnCard(c) {
     ? `<div class="conn connected"><i></i><div>Connected to exit #${esc(c.listingId)} <small>${esc(leftText(c.secondsLeft))} left · ends ${esc(ctTime(c.end))} · through ${c.source==="existing"?"your own":"the bundled"} Session Router</small></div></div>`
     : c.phase==="noroutes"
     ? `<div class="conn error"><i></i><div>Not connected: this computer's routes aren't up <small>exit #${esc(c.listingId)} is mapped · paid until ${esc(ctTime(c.end))}</small></div></div>`
+    : c.phase==="testing"
+    ? `<div class="conn connecting"><i></i><div>Testing a request through the exit… <small>exit #${esc(c.listingId)}</small></div></div>`
     : `<div class="conn connecting"><i></i><div>Waiting for this computer's routes… <small>exit #${esc(c.listingId)}</small></div></div>`;
   const checks = `<div data-testid="exit-checks">
       ${check(c.sessionLive, "Session to the exit is up")}
@@ -609,7 +646,7 @@ async function exitPay() {
   state.exitBusy = ""; render();
 }
 async function exitConnect(id) {
-  state.err = ""; state.exitConnecting = true; state.exitBusy = `Connecting to exit #${id}… (the first path can take up to a minute; then up to 30 seconds for this computer's routes)`; render();
+  state.err = ""; state.exitConnecting = true; state.exitBusy = `Connecting to exit #${id}… (the first path can take up to a minute, then up to 30 seconds for this computer's routes and 30 seconds to test a request through it)`; render();
   try { await api("/v1/exits/connect", {method:"POST", body: JSON.stringify({listingId:id})}); await loadExits(); }
   catch(e) { state.err = e.message; }
   state.exitConnecting = false; state.exitBusy = ""; render();
@@ -651,8 +688,8 @@ async function go(name, id) {
       state.screen = "progress";
       startPoll();
     } else if (name === "home") {
-      await refreshBalances();
-      state.screen = "home";
+      state.screen = "home"; render();
+      await Promise.all([refreshBalances(), refreshFaucetStatus()]);
     } else if (name === "history") {
       const j = await api("/v1/swaps");
       state.swaps = j.swaps||[];
@@ -671,6 +708,7 @@ async function go(name, id) {
       state.screen = "create-show";
     } else {
       state.screen = name;
+      if (name === "swap") loadSwapAssets();
     }
   } catch(e) { state.err = e.message; }
   render();
@@ -706,15 +744,21 @@ async function act(name) {
     if (name === "do-create") {
       const pw1 = $("#pw1").value, pw2 = $("#pw2").value;
       if (pw1 !== pw2) { state.err = "The two passwords do not match."; render(); return; }
-      await api("/v1/onboard/confirm", {method:"POST", body: JSON.stringify({password: pw1, words: state.answers})});
-      await boot();
+      state.saving = true; render();
+      try {
+        await api("/v1/onboard/confirm", {method:"POST", body: JSON.stringify({password: pw1, words: state.answers})});
+        await boot();
+      } finally { state.saving = false; }
       return;
     }
     if (name === "do-restore") {
       const pw1 = $("#pw1").value, pw2 = $("#pw2").value, mn = $("#mn").value;
       if (pw1 !== pw2) { state.err = "The two passwords do not match."; render(); return; }
-      await api("/v1/wallet/restore", {method:"POST", body: JSON.stringify({password: pw1, mnemonic: mn})});
-      await boot();
+      state.saving = true; render();
+      try {
+        await api("/v1/wallet/restore", {method:"POST", body: JSON.stringify({password: pw1, mnemonic: mn})});
+        await boot();
+      } finally { state.saving = false; }
       return;
     }
     if (name === "get-quote") {
@@ -774,6 +818,7 @@ async function act(name) {
       try {
         state.faucet = await api("/v1/faucet/claim", {method:"POST", body:"{}"});
         try { state.balances = await api("/v1/balances"); } catch(e) {}
+        await refreshFaucetStatus();
       } catch(e) { state.faucet = {ok:false, message: e.message}; }
       finally { state.faucetBusy = false; }
     }
@@ -812,6 +857,13 @@ setInterval(async () => {
   } catch(e) {}
 }, 1500);
 
+// Balances refresh on their own while the Balances screen is open.
+setInterval(async () => {
+  if (state.screen !== "home" || !state.status || state.status.state !== "unlocked" || state.faucetBusy) return;
+  await refreshBalances();
+  if (state.screen === "home") render();
+}, 15000);
+
 async function boot() {
   state.err = "";
   state.status = await api("/v1/status");
@@ -819,10 +871,11 @@ async function boot() {
   if (st === "new") { state.screen = "welcome"; }
   else if (st === "locked") { state.screen = "unlock"; }
   else {
-    await refreshBalances();
     if (state.status.openId) { state.swapId = state.status.openId; state.screen = "progress"; await refreshSwap(); startPoll(); }
     else if (state.status.pending) { state.screen = "confirm-satchel"; }
     else state.screen = "home";
+    render(); // show the wallet right away; balances fill in when they arrive
+    await Promise.all([refreshBalances(), refreshFaucetStatus()]);
   }
   render();
 }

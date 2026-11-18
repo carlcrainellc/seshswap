@@ -240,8 +240,8 @@ func TestRegistryQuotePicksBestBondedMakerWithinCap(t *testing.T) {
 		}
 	}
 	for _, a := range asked {
-		if strings.HasPrefix(a, "makera.sesh") {
-			t.Fatal("over-cap maker was asked")
+		if strings.HasPrefix(a, "makera.sesh") && strings.HasSuffix(a, "/v1/quote") {
+			t.Fatal("over-cap maker was asked for a quote")
 		}
 	}
 

@@ -401,6 +401,7 @@ func setupRouter() int {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "setup-router:", err)
+		fmt.Fprintln(os.Stderr, "If your account can't use sudo, ask someone who can to run the line above, then run ./seshswap check.")
 		return 1
 	}
 	if ok, _ := srouter.FileHasNetAdmin(bin); !ok {

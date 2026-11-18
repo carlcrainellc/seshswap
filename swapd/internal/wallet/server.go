@@ -155,6 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/wallet/lock", s.wrap(s.lock))
 	mux.HandleFunc("/v1/wallet/backup", s.wrap(s.backup))
 	mux.HandleFunc("/v1/balances", s.wrap(s.balances))
+	mux.HandleFunc("/v1/swap-assets", s.wrap(s.swapAssets))
 	mux.HandleFunc("/v1/quote", s.wrap(s.quote))
 	mux.HandleFunc("/v1/swaps", s.wrap(s.swaps))
 	mux.HandleFunc("/v1/swaps/", s.wrap(s.oneSwap))
@@ -172,6 +173,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/satchel/approve", s.wrap(s.satchelApprove))
 	mux.HandleFunc("/v1/satchel/reject", s.wrap(s.satchelReject))
 	mux.HandleFunc("/v1/faucet/claim", s.wrap(s.faucetClaim))
+	mux.HandleFunc("/v1/faucet/status", s.wrap(s.faucetStatus))
 	return s.checkOrigin(mux)
 }
 
@@ -347,6 +349,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		st["pending"] = s.proposal
 	}
 	st["exitsEnabled"] = s.exitsEnabled()
+	if s.reg.assets != nil {
+		st["swapAssets"] = s.reg.assets
+	}
 	st["faucet"] = s.faucetURL() != ""
 	if c := s.exitConnSnapshot(); c != nil {
 		st["exit"] = c
@@ -637,11 +642,11 @@ func (s *Server) balances(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if xw != nil {
-		var total, unlocked uint64
+		var total, unlocked, blocks uint64
 		err := xw.Session(ctx, cfg.MainWallet, func(sess *xmr.Sess) error {
 			_ = sess.Refresh(ctx)
 			var err error
-			total, unlocked, err = sess.Balance(ctx)
+			total, unlocked, blocks, err = sess.BalanceLock(ctx)
 			return err
 		})
 		if err != nil {
@@ -650,6 +655,13 @@ func (s *Server) balances(w http.ResponseWriter, r *http.Request) {
 			out["xmr"] = picoToXMR(total)
 			out["xmrUnlocked"] = picoToXMR(unlocked)
 			out["xmrPico"] = total
+			if total > unlocked {
+				out["xmrLocked"] = picoToXMR(total - unlocked)
+				if blocks == 0 {
+					blocks = 10
+				}
+				out["xmrUnlockMins"] = blocks * 2
+			}
 		}
 	} else {
 		out["xmrError"] = "Monero wallet is not connected"
@@ -730,6 +742,12 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 			msg = "no bonded maker in the registry gave a usable quote"
 			if regErr != "" {
 				msg += " (" + regErr + ")"
+			} else if s.noMakerTakes(wantUSDC) {
+				if wantUSDC {
+					msg = "No maker takes USDC right now. Swap ETH instead."
+				} else {
+					msg = "No maker takes ETH right now."
+				}
 			} else if r := rangeSummary(quotes); r != "" {
 				msg = r
 			}
@@ -871,11 +889,8 @@ func (s *Server) startSwap(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	pol := eng.Policy
-	tp := api.TakeParams{
-		MakerURL: makerURL, Value: val, MinXMR: req.MinXMR,
-		MinD1: 2*pol.Margin + 1800, MinD2: 2 * pol.Margin,
-		MaxConfs: 60, MinConfs: swap.XmrConfFloor, HTTP: s.http,
-	}
+	tp := takeLimits(pol, val)
+	tp.MakerURL, tp.MinXMR, tp.HTTP = makerURL, req.MinXMR, s.http
 	if req.ListingID != 0 {
 		if !s.regEnabled() {
 			writeErr(w, 400, "no registry is configured")

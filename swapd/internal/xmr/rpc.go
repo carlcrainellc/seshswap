@@ -237,6 +237,18 @@ func (s *Sess) Balance(ctx context.Context) (total, unlocked uint64, err error) 
 	return o.Balance, o.Unlocked, err
 }
 
+// BalanceLock is Balance plus how many blocks until all of it can be spent
+// (0 when everything is unlocked).
+func (s *Sess) BalanceLock(ctx context.Context) (total, unlocked, blocksToUnlock uint64, err error) {
+	var o struct {
+		Balance  uint64 `json:"balance"`
+		Unlocked uint64 `json:"unlocked_balance"`
+		Blocks   uint64 `json:"blocks_to_unlock"`
+	}
+	err = s.call(ctx, &o, "get_balance", nil)
+	return o.Balance, o.Unlocked, o.Blocks, err
+}
+
 type Transfer struct {
 	TxID          string `json:"txid"`
 	Amount        uint64 `json:"amount"`

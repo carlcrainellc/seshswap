@@ -27,6 +27,11 @@ once (it asks for your password; the router still runs as you):
 
     ./seshswap setup-router
 
+If your account can't use sudo, run `./seshswap check` once, then ask
+someone who can to run this from the SeshSwap folder:
+
+    sudo setcap cap_net_admin+ep session-router/bin/session-router
+
 Optional: `./install.sh` adds SeshSwap to your app menu (no sudo).
 `./seshswap check` checks that the bundled programs run on your machine.
 Your wallet lives in `~/.seshswap`.

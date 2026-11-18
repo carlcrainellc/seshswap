@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/carlcrainellc/seshswap/swapd/internal/api"
-	"github.com/carlcrainellc/seshswap/swapd/internal/swap"
 )
 
 //go:embed web/satchel-test.html
@@ -211,11 +210,9 @@ func (s *Server) satchelApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pol := s.eng.Policy
-	rec, err := api.Take(ctx, s.eng, api.TakeParams{
-		MakerURL: makerURL, Value: amount, MinXMR: p.MinXMR,
-		MinD1: 2*pol.Margin + 1800, MinD2: 2 * pol.Margin,
-		MaxConfs: 60, MinConfs: swap.XmrConfFloor, HTTP: s.http,
-	})
+	tp := takeLimits(pol, amount)
+	tp.MakerURL, tp.MinXMR, tp.HTTP = makerURL, p.MinXMR, s.http
+	rec, err := api.Take(ctx, s.eng, tp)
 	if err != nil {
 		writeErr(w, 422, friendlyNetErr(err))
 		return

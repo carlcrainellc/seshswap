@@ -19,7 +19,8 @@ down.
 2. Open **Exits** in the wallet, pick an exit and the hours, press **Buy**
    (USDC or ETH), check the price on the confirm step and pay.
 3. Press **Connect**. The wallet says Connected only once this computer's
-   routes are up; then it points DNS at the exit's resolver (`10.195.0.53`),
+   routes are up and a test request has gone through the exit (if none gets
+   through in 30 seconds, it disconnects and says so); then it points DNS at the exit's resolver (`10.195.0.53`),
    and puts it back when you disconnect, lock or close the wallet, or if the
    routes drop. See *System DNS*.
 4. Five minutes before your time ends, the wallet warns you and the

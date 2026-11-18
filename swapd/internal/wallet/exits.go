@@ -74,6 +74,7 @@ const (
 	phaseRouting  = "routing"  // mapped, waiting for this computer's routes
 	phaseUp       = "up"       // routes installed: connected
 	phaseNoRoutes = "noroutes" // routes didn't come up, or dropped
+	phaseTesting  = "testing"  // routes installed; checking that traffic gets through
 )
 
 // exitRoutesWait is how long Connect waits for the routes before it says so.
@@ -252,7 +253,7 @@ func (s *Server) exitsList(w http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			rw.Why = "couldn't read its price: " + err.Error()
 		case !o.ForSale():
-			rw.Why = "not selling time yet"
+			rw.Why = "not selling time right now"
 		case o.Owner != e.Owner:
 			rw.Why = "the listing changed hands; the old price no longer applies"
 		default:
@@ -853,6 +854,23 @@ func (s *Server) connectExit(ctx context.Context, listingID uint64) (*exitConn, 
 	deadline := time.Now().Add(exitRoutesWait)
 	for {
 		if s.checkExitRoutes(ctx, c) {
+			// Routes are in. Only say Connected once a request actually gets
+			// through the exit; otherwise put the network back and say so.
+			s.ex.mu.Lock()
+			c.Phase = phaseTesting
+			s.ex.Last = "Exit #" + strconv.FormatUint(listingID, 10) + ": routes are up. Testing a request through it…"
+			s.ex.mu.Unlock()
+			s.routesChanged()
+			if perr := exitProbe(ctx); perr != nil {
+				s.logf("exit %s: no traffic through it: %v", rec.ExitSesh, perr)
+				s.disconnectExit(context.Background(), "no traffic got through it")
+				msg := "Couldn't reach the internet through exit #" + strconv.FormatUint(listingID, 10) +
+					", so the wallet disconnected and your network is back to normal. The seller may be offline. Your paid time keeps running; try again later."
+				s.ex.mu.Lock()
+				s.ex.Last = msg
+				s.ex.mu.Unlock()
+				return nil, errors.New(msg)
+			}
 			s.exitRoutesUp(c)
 			break
 		}
@@ -869,6 +887,42 @@ func (s *Server) connectExit(ctx context.Context, listingID uint64) (*exitConn, 
 	cp := *c
 	s.ex.mu.Unlock()
 	return &cp, nil
+}
+
+// exitProbe checks that web traffic gets through a just-connected exit. It
+// asks Cloudflare's trace page by IP address (port 443, then 80), because
+// system DNS may not be switched yet. Tests replace it.
+var exitProbe = probeThroughExit
+
+func probeThroughExit(ctx context.Context) error {
+	t := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSHandshakeTimeout: 8 * time.Second}
+	cl := &http.Client{Timeout: 10 * time.Second, Transport: t}
+	targets := []string{"https://1.1.1.1/cdn-cgi/trace", "http://1.0.0.1/cdn-cgi/trace"}
+	deadline := time.Now().Add(30 * time.Second)
+	var last error
+	for i := 0; time.Now().Before(deadline) && ctx.Err() == nil; i++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targets[i%len(targets)], nil)
+		if err != nil {
+			return err
+		}
+		resp, err := cl.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return nil
+			}
+			err = fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if last == nil {
+		last = ctx.Err()
+	}
+	return last
 }
 
 // newChainHTTP is the chain RPC client. It has its own transport so the wallet
