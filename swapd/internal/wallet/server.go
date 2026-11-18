@@ -651,6 +651,9 @@ func (s *Server) balances(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			out["xmrError"] = err.Error()
+			if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+				out["xmrError"] = "Monero wallet is still catching up with the network. This can take a few minutes on a new wallet."
+			}
 		} else {
 			out["xmr"] = picoToXMR(total)
 			out["xmrUnlocked"] = picoToXMR(unlocked)

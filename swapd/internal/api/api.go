@@ -381,7 +381,10 @@ func postJSON(ctx context.Context, c *http.Client, url string, in, out any) erro
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&e)
-		return fmt.Errorf("POST %s: %s %s", url, resp.Status, e.Error)
+		if e.Error != "" {
+			return fmt.Errorf("the maker said: %s", e.Error)
+		}
+		return fmt.Errorf("POST %s: %s", url, resp.Status)
 	}
 	if out == nil {
 		return nil
