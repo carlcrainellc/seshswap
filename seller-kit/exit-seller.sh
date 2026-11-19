@@ -2,10 +2,11 @@
 # Exit seller kit: sell hours on a lease-gated Session Router exit, paid through ExitLease
 # and listed in SeshRegistry (tag "exit"). Testnets only.
 #
-# Exit mode, NAT, web (TCP 80/443), the exit's own resolver on the tunnel, DNS to public
-# resolvers (rate-limited), and a watcher that admits paying buyers. Buyers pay on-chain
-# (ExitLease); the listing lives in SeshRegistry. A host can also admit a client .sesh
-# without payment (allow / disallow).
+# Exit mode, NAT, web (TCP 80/443, new connections rate-limited 50/s burst 100), the
+# exit's own resolver on the tunnel, DNS to public resolvers (rate-limited 100/s burst
+# 200), and a watcher that admits paying buyers. Buyers pay on-chain (ExitLease); the
+# listing lives in SeshRegistry. A host can also admit a client .sesh without payment
+# (allow / disallow); those clients skip the rate limits.
 #
 #   exit-seller.sh render  [options]   write configs under PREFIX (no root needed)
 #   exit-seller.sh install [options]   Ubuntu 24.04 + systemd: packages, configs, units (root)
@@ -402,7 +403,7 @@ no-resolvconf=1
 listen=0.0.0.0:0
 INI
 
-  local allow="" v6set="" v6fwd="    iifname \"$TUN\" meta nfproto ipv6 drop" v6nat="" v6dns="" v6unl=""
+  local allow="" v6set="" v6fwd="    iifname \"$TUN\" meta nfproto ipv6 drop" v6nat="" v6dns="" v6unl="" v6webunl="" v6web=""
   [ -n "$ALLOW_NET" ] && allow="    iifname \"$TUN\" ip daddr $ALLOW_NET tcp dport { 80, 443 } oifname \"$WAN_IF\" accept"
   local un4set="  set unlimited4 { type ipv4_addr; }"
   [ -n "$un4_el" ] && un4set="  set unlimited4 { type ipv4_addr; elements = { $un4_el }; }"
@@ -413,11 +414,14 @@ INI
     type ipv6_addr; flags interval
     elements = { ::/127, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, fc00::/7, fe80::/10, ff00::/8 }
   }
-  set dnsfwd_rl6 { type ipv6_addr; size 65535; flags dynamic,timeout; timeout 1m; }"
+  set dnsfwd_rl6 { type ipv6_addr; size 65535; flags dynamic,timeout; timeout 1m; }
+  set web_rl6 { type ipv6_addr; size 65535; flags dynamic,timeout; timeout 1m; }"
     v6fwd="    iifname \"$TUN\" ip6 daddr @blocked6 drop"
     v6nat="    ip6 saddr $TUN_NET6 oifname \"$WAN_IF\" counter masquerade"
     v6unl="    iifname \"$TUN\" oifname \"$WAN_IF\" meta l4proto { tcp, udp } th dport 53 ip6 saddr @unlimited6 counter accept"
     v6dns="    iifname \"$TUN\" oifname \"$WAN_IF\" meta l4proto { tcp, udp } th dport 53 update @dnsfwd_rl6 { ip6 saddr limit rate over 100/second burst 200 packets } drop"
+    v6webunl="    iifname \"$TUN\" oifname \"$WAN_IF\" tcp dport { 80, 443 } ip6 saddr @unlimited6 counter accept"
+    v6web="    iifname \"$TUN\" oifname \"$WAN_IF\" tcp dport { 80, 443 } ct state new update @web_rl6 { ip6 saddr limit rate over 50/second burst 100 packets } drop"
   fi
   cat > "$C/nat.nft" <<NFT
 table inet srnet_seller
@@ -433,6 +437,7 @@ $un4set
 $un6set
   set dns_rl4 { type ipv4_addr; size 65535; flags dynamic,timeout; timeout 1m; }
   set dnsfwd_rl4 { type ipv4_addr; size 65535; flags dynamic,timeout; timeout 1m; }
+  set web_rl4 { type ipv4_addr; size 65535; flags dynamic,timeout; timeout 1m; }
   chain forward_filter {
     type filter hook forward priority -10; policy accept;
 $allow
@@ -443,6 +448,10 @@ $v6unl
     iifname "$TUN" oifname "$WAN_IF" meta l4proto { tcp, udp } th dport 53 update @dnsfwd_rl4 { ip saddr limit rate over 100/second burst 200 packets } drop
 $v6dns
     iifname "$TUN" oifname "$WAN_IF" meta l4proto { tcp, udp } th dport 53 counter accept
+    iifname "$TUN" oifname "$WAN_IF" tcp dport { 80, 443 } ip saddr @unlimited4 counter accept
+$v6webunl
+    iifname "$TUN" oifname "$WAN_IF" tcp dport { 80, 443 } ct state new update @web_rl4 { ip saddr limit rate over 50/second burst 100 packets } drop
+$v6web
     iifname "$TUN" oifname "$WAN_IF" tcp dport { 80, 443 } counter accept
     iifname "$TUN" drop
     oifname "$TUN" ct state established,related accept

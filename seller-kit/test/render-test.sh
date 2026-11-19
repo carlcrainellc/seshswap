@@ -17,6 +17,11 @@ grep -q 'th dport 53 drop' "$T/config/nat.nft" && bad "still drops all forwarded
 grep -q 'dnsfwd_rl4' "$T/config/nat.nft" && grep -q 'limit rate over 100/second burst 200 packets' "$T/config/nat.nft" \
   && ok "forwarded DNS is rate-limited 100/s burst 200" || bad "missing DNS forward rate limit"
 grep -q 'tcp dport { 80, 443 }' "$T/config/nat.nft" && ok "web 80/443 still forwarded" || bad "web rules"
+grep -q 'web_rl4' "$T/config/nat.nft" && grep -q 'limit rate over 50/second burst 100 packets' "$T/config/nat.nft" \
+  && grep -q 'ct state new update @web_rl4' "$T/config/nat.nft" \
+  && ok "web 80/443 new connections are rate-limited 50/s burst 100" || bad "missing web rate limit"
+grep -q 'tcp dport { 80, 443 } ip saddr @unlimited4 counter accept' "$T/config/nat.nft" \
+  && ok "unlimited4 is exempt from the web rate limit" || bad "no web unlimited exemption"
 grep -q "ip daddr 10.195.0.53" "$T/config/nat.nft" && ok "local resolver still accepted on the tunnel" || bad "local DNS"
 
 "$KIT" allow --prefix "$T" --wan eth0 --ipv6 off "$A" >/dev/null
@@ -42,6 +47,8 @@ if [ -x /usr/sbin/nft ]; then
   unshare -rn -- /usr/sbin/nft -c -f "$T/config/nat.nft" && ok "nft -c accepts the ipv4-only table" || bad "nft -c ipv4"
   "$KIT" render --prefix "$T" --wan eth0 --ipv6 on >/dev/null
   grep -q dnsfwd_rl6 "$T/config/nat.nft" && ok "ipv6 on: forwarded DNS rate-limit for v6" || bad "no dnsfwd_rl6"
+  grep -q web_rl6 "$T/config/nat.nft" && grep -q 'update @web_rl6' "$T/config/nat.nft" \
+    && ok "ipv6 on: web rate-limit for v6" || bad "no web_rl6"
   unshare -rn -- /usr/sbin/nft -c -f "$T/config/nat.nft" && ok "nft -c accepts the ipv6-on table" || bad "nft -c ipv6"
   unshare -rn -- /usr/sbin/nft -f "$T/config/nat.nft" && ok "nft -f loads the table in a netns" || bad "nft -f load"
 else

@@ -79,10 +79,14 @@ out=$(kit check --wan wan0 --ipv6 off 2>&1) && bad "check passed on a clean host
 kit nat-up --wan wan0 --ipv6 off >/dev/null
 [ "$(fwd)" = 1 ] && ok "nat-up turned ip_forward on" || bad "ip_forward=$(fwd)"
 kit check >/dev/null 2>&1 && ok "check passes after nat-up (settings read back from kit.env)" || bad "check after nat-up"
-r=$(peer 443); [ "$r" = 192.0.2.10 ] && ok "tcp/443 from a buyer reaches the internet as the seller ($r)" || bad "443 got '$r'"
-r=$(peer 22); [ "$r" = blocked ] && ok "tcp/22 is not forwarded" || bad "22 got '$r'"
+ip netns exec $S nft list set inet srnet_seller web_rl4 >/dev/null \
+  && ip netns exec $S nft list chain inet srnet_seller forward_filter | grep -q 'limit rate over 50/second burst 100 packets' \
+  && ok "web rate limit (50/s burst 100) is loaded" || bad "web_rl4 missing after nat-up"
+# Snapshot before any forwarded traffic: new 80/443 connections fill web_rl4.
 rs() { ip netns exec $S nft list ruleset | sed 's/packets [0-9]* bytes [0-9]*//'; }
 A=$(rs)
+r=$(peer 443); [ "$r" = 192.0.2.10 ] && ok "tcp/443 from a buyer reaches the internet as the seller ($r)" || bad "443 got '$r'"
+r=$(peer 22); [ "$r" = blocked ] && ok "tcp/22 is not forwarded" || bad "22 got '$r'"
 
 # 3. idempotent
 kit nat-up >/dev/null; kit nat-up >/dev/null

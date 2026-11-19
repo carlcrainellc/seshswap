@@ -9,8 +9,9 @@ Rent a Session Router exit by the hour from the wallet. Testnet only
 - `ExitPay`: `0xE622AF84dcC1f976f14E143287e68587CC8F24A6`
 
 Connecting installs a default route through the tunnel. The exit carries web
-traffic (TCP 80 and 443), its own DNS (`10.195.0.53`), and DNS to public
-resolvers (UDP and TCP 53, rate-limited). Private address ranges and any other
+traffic (TCP 80 and 443, new connections rate-limited at 50/s burst 100 per
+client), its own DNS (`10.195.0.53`), and DNS to public resolvers (UDP and
+TCP 53, rate-limited at 100/s burst 200). Private address ranges and any other
 ports are dropped while you're connected. Paid hours are final and don't renew.
 They are not refunded if the exit goes down.
 
@@ -109,11 +110,13 @@ swapd exits offer -config cli.json -id N -payout 0xPAYOUT -usdc-per-hour 0.10 -e
 seller-kit/exit-seller.sh install --listing N   # starts the watcher
 ```
 
-The kit runs the exit router, an nftables NAT for 80/443, an unbound resolver
-on the tunnel, forwarded DNS to public resolvers (100/s per client, burst 200;
-private ranges stay blocked), and a watcher that admits buyers from
-`ExitLease` events until their time ends. The wallet still uses the exit's
-resolver; Rusty on Windows sends DNS to 1.1.1.1, which this forwarding is for.
+The kit runs the exit router, an nftables NAT for 80/443 (new connections
+rate-limited at 50/s burst 100 per client), an unbound resolver on the tunnel,
+forwarded DNS to public resolvers (100/s per client, burst 200; private ranges
+stay blocked), and a watcher that admits buyers from `ExitLease` events until
+their time ends. The wallet still uses the exit's resolver; Rusty on Windows
+sends DNS to 1.1.1.1, which this forwarding is for. Host-granted clients
+(`allow`) skip both rate limits. The local resolver's own 100/s cap is unchanged.
 On hosts without systemd, use `exit-seller.sh up` and `exit-seller.sh down`.
 
 To let a client in without payment, and skip rate limits for them:
