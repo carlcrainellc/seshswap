@@ -2,9 +2,10 @@
 # Exit seller kit: sell hours on a lease-gated Session Router exit, paid through ExitLease
 # and listed in SeshRegistry (tag "exit"). Testnets only.
 #
-# Exit mode, NAT, 80/443 only, an unbound resolver reachable only through the tunnel, and a
-# watcher that admits paying buyers. Buyers pay on-chain (ExitLease); the listing lives in
-# SeshRegistry.
+# Exit mode, NAT, web (TCP 80/443), the exit's own resolver on the tunnel, DNS to public
+# resolvers (rate-limited), and a watcher that admits paying buyers. Buyers pay on-chain
+# (ExitLease); the listing lives in SeshRegistry. A host can also admit a client .sesh
+# without payment (allow / disallow).
 #
 #   exit-seller.sh render  [options]   write configs under PREFIX (no root needed)
 #   exit-seller.sh install [options]   Ubuntu 24.04 + systemd: packages, configs, units (root)
@@ -18,9 +19,13 @@
 #   exit-seller.sh restart-exit [opts] restart only the exit router, same key (used by the watchdog)
 #   exit-seller.sh restart-probe [opts] restart the watchdog's probe router (used by the watchdog)
 #   exit-seller.sh status  [options]
+#   exit-seller.sh allow   <addr>.sesh   admit this client with no payment (repeatable)
+#   exit-seller.sh disallow <addr>.sesh  remove a host-granted client
+#   exit-seller.sh allowed               list host-granted clients
 #
 # Settings given at install/up/render are saved in PREFIX/config/kit.env, so later commands
-# (check, nat-up, down, uninstall) use them without repeating the flags.
+# (check, nat-up, down, uninstall, allow) use them without repeating the flags.
+# Host-granted addresses are kept in PREFIX/config/allowed.
 #
 # Options (env or flags):
 #   --prefix DIR        install root (default /opt/srnet-exit)
@@ -44,10 +49,13 @@
 #                       namespace (--probe-ns, default exitprobe) that the exit lets in by key.
 #   --watchdog-args A   extra flags for "swapd exits watchdog" (e.g. "-fails 10 -min-gap 30m")
 #   --probe-ns NAME     network namespace for the watchdog's probe router (default exitprobe)
+#   --unlimited ADDR    same as "allow ADDR" when rendering or installing (repeatable)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 CMD=${1:-}; shift || true
+ARGS=()
+UNLIMITED_ADD=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --prefix) PREFIX=$2; shift 2;;
@@ -67,7 +75,11 @@ while [ $# -gt 0 ]; do
     --watchdog) WATCHDOG=$2; shift 2;;
     --watchdog-args) WATCHDOG_ARGS=$2; shift 2;;
     --probe-ns) PROBE_NS=$2; shift 2;;
-    *) echo "unknown option $1" >&2; exit 2;;
+    --unlimited)
+      [ -n "${2:-}" ] || { echo "--unlimited needs a .sesh address" >&2; exit 2; }
+      UNLIMITED_ADD+=("$2"); shift 2;;
+    --*) echo "unknown option $1" >&2; exit 2;;
+    *) ARGS+=("$1"); shift;;
   esac
 done
 PREFIX=${PREFIX:-/opt/srnet-exit}
@@ -92,6 +104,201 @@ case "$IPV6" in auto|on|off) ;; *) echo "--ipv6 must be auto, on or off" >&2; ex
 die() { echo "exit-seller: $*" >&2; exit 1; }
 need_root() { [ "$(id -u)" = 0 ] || die "run as root (sudo)"; }
 
+# Host-granted clients: admitted with no payment, pinned to a fixed tunnel IP so
+# nftables can skip rate limits for them. There is no data cap in the kit; a
+# whitelist hit also has no lease clock. Stored in $C/allowed.
+ALLOWED_FILE() { echo "$C/allowed"; }
+
+valid_sesh() {
+  python3 -c 'import sys
+s=sys.argv[1]
+ok=len(s)==57 and s.endswith(".sesh") and all((("a"<=c<="z" and c not in "lv") or c=="1" or "3"<=c<="9") for c in s[:52])
+sys.exit(0 if ok else 1)' "$1"
+}
+
+# Merge --unlimited addresses into $C/allowed, assigning fixed tunnel IPs as needed.
+# Safe to run before or after the file exists.
+sync_allowed() {
+  mkdir -p "$C"
+  local f; f=$(ALLOWED_FILE)
+  python3 - "$f" "${UNLIMITED_ADD[@]+"${UNLIMITED_ADD[@]}"}" <<'PY'
+import os, sys
+path = sys.argv[1]
+adds = sys.argv[2:]
+exit_v4, exit_v6 = "10.193.0.1", "fd2e:7365:7369::1"
+rows = []  # (sesh, v4, v6)
+seen = set()
+if os.path.exists(path):
+    for line in open(path):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        p = s.split()
+        if len(p) < 3:
+            continue
+        addr, v4, v6 = p[0], p[1], p[2]
+        if addr in seen:
+            continue
+        seen.add(addr)
+        rows.append([addr, v4, v6])
+used4 = {r[1] for r in rows} | {exit_v4, "10.193.0.0", "10.193.255.255"}
+used6 = {r[2] for r in rows} | {exit_v6}
+
+def valid(s):
+    return len(s)==57 and s.endswith(".sesh") and all((("a"<=c<="z" and c not in "lv") or c=="1" or "3"<=c<="9") for c in s[:52])
+
+def dec4(ip):
+    a,b,c,d = map(int, ip.split("."))
+    n = (a<<24)|(b<<16)|(c<<8)|d
+    n -= 1
+    return f"{(n>>24)&255}.{(n>>16)&255}.{(n>>8)&255}.{n&255}"
+
+def dec6(ip):
+    if ip.startswith("fd2e:7365:7369:"):
+        hexpart = ip.split("::")[-1] if "::" in ip else ip.split(":")[-1]
+        if hexpart in ("", "fd2e:7365:7369"):
+            n = 0
+        else:
+            n = int(hexpart, 16)
+        n -= 1
+        if n < 2:
+            raise SystemExit("no free pinned IPv6 left in fd2e:7365:7369::2-ffff")
+        return f"fd2e:7365:7369::{n:x}"
+    raise SystemExit(f"unexpected IPv6 pin {ip}")
+
+def next4():
+    ip = "10.193.255.254"
+    while ip in used4:
+        if ip == "10.193.0.2":
+            raise SystemExit("no free pinned IPv4 left in 10.193.0.2-10.193.255.254")
+        ip = dec4(ip)
+    used4.add(ip)
+    return ip
+
+def next6():
+    ip = "fd2e:7365:7369::ffff"
+    while ip in used6:
+        ip = dec6(ip)
+    used6.add(ip)
+    return ip
+
+for a in adds:
+    if not valid(a):
+        raise SystemExit(f"not a client .sesh address: {a}")
+    if a in seen:
+        continue
+    v4, v6 = next4(), next6()
+    rows.append([a, v4, v6])
+    seen.add(a)
+
+rows.sort(key=lambda r: r[0])
+text = (
+    "# Client .sesh addresses this host admits without payment.\n"
+    "# Each line: ADDRESS.sesh  IPV4  IPV6\n"
+    "# Managed by exit-seller.sh allow / disallow / --unlimited. Do not share keys, only .sesh addresses.\n"
+)
+for addr, v4, v6 in rows:
+    text += f"{addr}  {v4}  {v6}\n"
+os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    f.write(text)
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PY
+}
+
+# Print "addr v4 v6" lines (no comments).
+allowed_rows() {
+  local f; f=$(ALLOWED_FILE)
+  [ -f "$f" ] || return 0
+  awk 'NF>=3 && $1 !~ /^#/ {print $1, $2, $3}' "$f"
+}
+
+allow_one() {
+  local addr=$1
+  valid_sesh "$addr" || die "not a client .sesh address: $addr"
+  if allowed_rows | awk -v a="$addr" '$1==a {found=1} END{exit !found}'; then
+    echo "already allowed: $addr"
+  else
+    UNLIMITED_ADD+=("$addr")
+    sync_allowed
+    echo "allowed $addr (no payment; rate limits skipped)"
+    allowed_rows | awk -v a="$addr" '$1==a {print "  tunnel IP: "$2, $3}'
+  fi
+}
+
+disallow_one() {
+  local addr=$1 f
+  valid_sesh "$addr" || die "not a client .sesh address: $addr"
+  f=$(ALLOWED_FILE)
+  [ -f "$f" ] || die "$addr is not on the allow list"
+  if ! allowed_rows | awk -v a="$addr" '$1==a {found=1} END{exit !found}'; then
+    die "$addr is not on the allow list"
+  fi
+  python3 - "$f" "$addr" <<'PY'
+import os, sys
+path, addr = sys.argv[1], sys.argv[2]
+rows = []
+for line in open(path):
+    s = line.strip()
+    if not s or s.startswith("#"):
+        continue
+    p = s.split()
+    if len(p) >= 3 and p[0] != addr:
+        rows.append((p[0], p[1], p[2]))
+text = (
+    "# Client .sesh addresses this host admits without payment.\n"
+    "# Each line: ADDRESS.sesh  IPV4  IPV6\n"
+    "# Managed by exit-seller.sh allow / disallow / --unlimited. Do not share keys, only .sesh addresses.\n"
+)
+for a, v4, v6 in rows:
+    text += f"{a}  {v4}  {v6}\n"
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    f.write(text)
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PY
+  echo "removed $addr from the allow list"
+}
+
+list_allowed() {
+  if ! allowed_rows | grep -q .; then
+    echo "no host-granted clients"
+    return 0
+  fi
+  echo "host-granted clients (no payment, rate limits skipped):"
+  allowed_rows | while read -r a v4 v6; do
+    echo "  $a  $v4  $v6"
+  done
+}
+
+# After allow/disallow: rewrite configs and, if we can, reload NAT and restart the exit.
+apply_allowed() {
+  render >/dev/null
+  if [ "$(id -u)" != 0 ]; then
+    echo "config written under $PREFIX; as root run: $0 nat-up --prefix $PREFIX"
+    echo "and restart the exit (systemctl restart srnet-exit, or exit-seller.sh restart-exit) so the list takes effect."
+    return 0
+  fi
+  if nft list table inet srnet_seller >/dev/null 2>&1; then
+    nft -f "$C/nat.nft"
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet srnet-exit 2>/dev/null; then
+    systemctl restart srnet-exit
+    echo "exit router restarted so the new allow list takes effect"
+  elif [ -f "$RUN/exit.pid" ] && kill -0 "$(cat "$RUN/exit.pid")" 2>/dev/null; then
+    PUB=$(issuer_pub)
+    stop_bg exit
+    start_exit
+    echo "exit router restarted so the new allow list takes effect"
+  else
+    echo "exit is not running; the list will apply when it starts"
+  fi
+}
+
+
 # IPv6 is forwarded when asked, or (auto) when this host can reach the IPv6 internet.
 use_v6() {
   case "$IPV6" in
@@ -110,13 +317,23 @@ render() {
       printf ': "${%s:=%s}"\n' "$v" "${!v}"
     done
   } > "$C/kit.env.tmp" && chmod 600 "$C/kit.env.tmp" && mv "$C/kit.env.tmp" "$C/kit.env"
-  local probe_wl=""
+  sync_allowed
+  local probe_wl="" host_wl="" un4_el="" un6_el=""
   [ -s "$C/probe.sesh" ] && probe_wl="# the watchdog's probe router (this host)
 auth-whitelist=$(cat "$C/probe.sesh")"
+  while read -r a v4 v6; do
+    [ -n "$a" ] || continue
+    host_wl="${host_wl}# host-granted (no payment)
+auth-whitelist=$a
+mapaddr=$a:$v4,$v6
+"
+    un4_el="${un4_el}${un4_el:+, }$v4"
+    un6_el="${un6_el}${un6_el:+, }$v6"
+  done < <(allowed_rows)
   cat > "$C/exit.ini" <<INI
-# Exit seller kit: lease-gated exit. Only signed admissions
-# (SR_EXIT_LEASE_ADMISSIONS / SR_EXIT_LEASE_ISSUER_PUBKEY) and the watchdog's
-# probe router get a session.
+# Exit seller kit: lease-gated exit. Signed admissions
+# (SR_EXIT_LEASE_ADMISSIONS / SR_EXIT_LEASE_ISSUER_PUBKEY), the watchdog's
+# probe router, and host-granted clients (auth-whitelist / allow) get a session.
 [router]
 data-dir=$DATA
 
@@ -126,8 +343,8 @@ level=info
 [exit]
 enable=true
 routed-range=public
-# Web traffic only. DNS is answered by this exit's own resolver ($DNS_IP);
-# nftables drops DNS forwarded anywhere else.
+# Web (TCP 80/443), this exit's resolver ($DNS_IP), and DNS to public
+# resolvers (nftables rate-limits forwarded DNS; private ranges stay blocked).
 policy=tcp/443
 policy=tcp/80
 policy=udp/53
@@ -141,6 +358,7 @@ ifaddr=fd2e:7365:7369::1/64
 reachable=true
 auth-type=whitelist
 $probe_wl
+$host_wl
 auto-routing=false
 blackhole-routes=false
 
@@ -184,15 +402,22 @@ no-resolvconf=1
 listen=0.0.0.0:0
 INI
 
-  local allow="" v6set="" v6fwd="    iifname \"$TUN\" meta nfproto ipv6 drop" v6nat=""
+  local allow="" v6set="" v6fwd="    iifname \"$TUN\" meta nfproto ipv6 drop" v6nat="" v6dns="" v6unl=""
   [ -n "$ALLOW_NET" ] && allow="    iifname \"$TUN\" ip daddr $ALLOW_NET tcp dport { 80, 443 } oifname \"$WAN_IF\" accept"
+  local un4set="  set unlimited4 { type ipv4_addr; }"
+  [ -n "$un4_el" ] && un4set="  set unlimited4 { type ipv4_addr; elements = { $un4_el }; }"
+  local un6set="  set unlimited6 { type ipv6_addr; }"
+  [ -n "$un6_el" ] && un6set="  set unlimited6 { type ipv6_addr; elements = { $un6_el }; }"
   if use_v6; then
     v6set="  set blocked6 {
     type ipv6_addr; flags interval
     elements = { ::/127, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, fc00::/7, fe80::/10, ff00::/8 }
-  }"
+  }
+  set dnsfwd_rl6 { type ipv6_addr; size 65535; flags dynamic,timeout; timeout 1m; }"
     v6fwd="    iifname \"$TUN\" ip6 daddr @blocked6 drop"
     v6nat="    ip6 saddr $TUN_NET6 oifname \"$WAN_IF\" counter masquerade"
+    v6unl="    iifname \"$TUN\" oifname \"$WAN_IF\" meta l4proto { tcp, udp } th dport 53 ip6 saddr @unlimited6 counter accept"
+    v6dns="    iifname \"$TUN\" oifname \"$WAN_IF\" meta l4proto { tcp, udp } th dport 53 update @dnsfwd_rl6 { ip6 saddr limit rate over 100/second burst 200 packets } drop"
   fi
   cat > "$C/nat.nft" <<NFT
 table inet srnet_seller
@@ -204,13 +429,20 @@ table inet srnet_seller {
                  192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3 }
   }
 $v6set
+$un4set
+$un6set
   set dns_rl4 { type ipv4_addr; size 65535; flags dynamic,timeout; timeout 1m; }
+  set dnsfwd_rl4 { type ipv4_addr; size 65535; flags dynamic,timeout; timeout 1m; }
   chain forward_filter {
     type filter hook forward priority -10; policy accept;
-    iifname "$TUN" meta l4proto { tcp, udp } th dport 53 drop
 $allow
     iifname "$TUN" ip daddr @blocked4 drop
 $v6fwd
+    iifname "$TUN" oifname "$WAN_IF" meta l4proto { tcp, udp } th dport 53 ip saddr @unlimited4 counter accept
+$v6unl
+    iifname "$TUN" oifname "$WAN_IF" meta l4proto { tcp, udp } th dport 53 update @dnsfwd_rl4 { ip saddr limit rate over 100/second burst 200 packets } drop
+$v6dns
+    iifname "$TUN" oifname "$WAN_IF" meta l4proto { tcp, udp } th dport 53 counter accept
     iifname "$TUN" oifname "$WAN_IF" tcp dport { 80, 443 } counter accept
     iifname "$TUN" drop
     oifname "$TUN" ct state established,related accept
@@ -220,6 +452,7 @@ $v6fwd
     type filter hook input priority -10; policy accept;
     ip daddr $DNS_IP iifname != { "$TUN", "lo" } drop
     iifname "$TUN" ct state established,related accept
+    iifname "$TUN" ip daddr $DNS_IP meta l4proto { tcp, udp } th dport 53 ip saddr @unlimited4 counter accept
     iifname "$TUN" ip daddr $DNS_IP meta l4proto { tcp, udp } th dport 53 update @dns_rl4 { ip saddr limit rate over 100/second burst 200 packets } drop
     iifname "$TUN" ip daddr $DNS_IP meta l4proto { tcp, udp } th dport 53 counter accept
     iifname "$TUN" drop
@@ -674,12 +907,27 @@ U
   nat-up) need_root; render >/dev/null; nat_up; nat_check;;
   nat-down) need_root; nat_down;;
   check) nat_check;;
+  allow)
+    if [ ${#ARGS[@]} -eq 0 ] && [ ${#UNLIMITED_ADD[@]} -eq 0 ]; then list_allowed; exit 0; fi
+    [ ${#ARGS[@]} -le 1 ] || die "usage: exit-seller.sh allow <addr>.sesh"
+    [ ${#ARGS[@]} -eq 1 ] && allow_one "${ARGS[0]}"
+    # --unlimited addresses are merged by render (via apply_allowed)
+    apply_allowed
+    if [ ${#ARGS[@]} -eq 0 ]; then list_allowed; fi
+    ;;
+  disallow)
+    [ ${#ARGS[@]} -eq 1 ] || die "usage: exit-seller.sh disallow <addr>.sesh"
+    disallow_one "${ARGS[0]}"
+    apply_allowed
+    ;;
+  allowed) list_allowed;;
   status)
     for n in dns exit watcher probe watchdog; do
       if [ -f "$RUN/$n.pid" ] && kill -0 "$(cat "$RUN/$n.pid")" 2>/dev/null; then echo "$n: running"; else echo "$n: stopped"; fi
     done
     [ -f "$C/exit.sesh" ] && echo "exit: $(cat "$C/exit.sesh")"
     [ "$(id -u)" = 0 ] && { nat_check 2>&1 || true; }
+    list_allowed
     [ -f "$RUN/admissions.json" ] && python3 -c "import json,sys,time;a=json.load(open(sys.argv[1]))['admissions'];[print('admitted',r['client_sesh'],'until',time.strftime('%Y-%m-%d %H:%M %Z',time.localtime(r['exp']))) for r in a.values()]" "$RUN/admissions.json" 2>/dev/null || true
     ;;
   *) awk 'NR>1 && /^set -euo/{exit} NR>1' "$0"; exit 2;;

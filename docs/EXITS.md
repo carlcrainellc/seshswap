@@ -9,9 +9,10 @@ Rent a Session Router exit by the hour from the wallet. Testnet only
 - `ExitPay`: `0xE622AF84dcC1f976f14E143287e68587CC8F24A6`
 
 Connecting installs a default route through the tunnel. The exit carries web
-traffic (TCP 80 and 443) and its own DNS (`10.195.0.53`); anything else is
-dropped while you're connected. Paid hours are final and don't renew. They are not refunded if the exit goes
-down.
+traffic (TCP 80 and 443), its own DNS (`10.195.0.53`), and DNS to public
+resolvers (UDP and TCP 53, rate-limited). Private address ranges and any other
+ports are dropped while you're connected. Paid hours are final and don't renew.
+They are not refunded if the exit goes down.
 
 ## Buying time
 
@@ -109,9 +110,24 @@ seller-kit/exit-seller.sh install --listing N   # starts the watcher
 ```
 
 The kit runs the exit router, an nftables NAT for 80/443, an unbound resolver
-on the tunnel, and a watcher that admits buyers from `ExitLease` events until
-their time ends. On hosts without systemd, use `exit-seller.sh up` and
-`exit-seller.sh down`.
+on the tunnel, forwarded DNS to public resolvers (100/s per client, burst 200;
+private ranges stay blocked), and a watcher that admits buyers from
+`ExitLease` events until their time ends. The wallet still uses the exit's
+resolver; Rusty on Windows sends DNS to 1.1.1.1, which this forwarding is for.
+On hosts without systemd, use `exit-seller.sh up` and `exit-seller.sh down`.
+
+To let a client in without payment, and skip rate limits for them:
+
+```bash
+seller-kit/exit-seller.sh allow <their-address>.sesh
+seller-kit/exit-seller.sh allowed
+seller-kit/exit-seller.sh disallow <their-address>.sesh
+```
+
+The list is kept in `/opt/srnet-exit/config/allowed`. You can also pass
+`--unlimited <addr>.sesh` (repeatable) at `install` or `render`. The kit
+restarts the exit if it is already running; you do not need to reinstall.
+There is no data cap. Do not put keys in the file, only `.sesh` addresses.
 
 Forwarding and NAT are set up by the kit: `net.ipv4.ip_forward`, an nftables
 masquerade for the exit range out of the WAN interface, and the same for IPv6

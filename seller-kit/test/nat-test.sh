@@ -5,12 +5,17 @@
 #   [client ns] 10.193.0.2 --veth "sr-tun-seller"--> [seller ns] --wan0 192.0.2.10--> [net ns] 192.0.2.1
 #
 # Checks: check fails from clean; nat-up turns forwarding on and NATs web traffic (the
-# server sees the seller's address); port 22 stays closed; nat-up twice gives the same
-# ruleset; nat-down/uninstall put everything back; IPv6 (auto) gets its own masquerade.
+# server sees the seller's address); port 22 stays closed; public DNS (tcp/udp 53) is
+# forwarded and private DNS is not; allow/disallow updates the unlimited set; nat-up
+# twice gives the same ruleset; nat-down/uninstall put everything back; IPv6 (auto) gets
+# its own masquerade.
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")/.." && pwd)/exit-seller.sh
 S=srxnat-s; CL=srxnat-c; NET=srxnat-n; PROBE=srxnat-p # never the live exitprobe
 T=$(mktemp -d); PFX=$T/prefix
+mkdir -p $T/bin $T/units
+printf '#!/bin/sh\necho "systemctl $*" >> %s/systemctl.log\n' $T > $T/bin/systemctl
+chmod +x $T/bin/systemctl
 pass=0; fail=0
 ok()  { echo "PASS  $*"; pass=$((pass+1)); }
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
@@ -32,7 +37,7 @@ ip link add wan0 netns $S type veth peer name up0 netns $NET
 ip -n $S addr add 192.0.2.10/24 dev wan0; ip -n $S link set wan0 up
 ip -n $NET addr add 192.0.2.1/24 dev up0; ip -n $NET link set up0 up
 ip -n $S route add default via 192.0.2.1
-# the "internet": answers on 443 and 22 and reports who connected
+# the "internet": answers on 443, 22 and 53 and reports who connected
 cat > $T/srv.py <<'PY'
 import socket, threading, sys
 def serve(port):
@@ -40,14 +45,26 @@ def serve(port):
     s.bind(("0.0.0.0", port)); s.listen(8)
     while True:
         c, a = s.accept(); c.sendall(a[0].encode()); c.close()
-for p in (443, 22): threading.Thread(target=serve, args=(p,), daemon=True).start()
+for p in (443, 22, 53): threading.Thread(target=serve, args=(p,), daemon=True).start()
+def serve_udp(port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("0.0.0.0", port))
+    while True:
+        data, a = s.recvfrom(64)
+        s.sendto(a[0].encode(), a)
+threading.Thread(target=serve_udp, args=(53,), daemon=True).start()
 threading.Event().wait()
 PY
 ip netns exec $NET python3 $T/srv.py & sleep 0.5
 peer() { ip netns exec $CL python3 -c 'import socket,sys
 try:
-  s=socket.create_connection(("192.0.2.1",int(sys.argv[1])),timeout=2); print(s.recv(64).decode())
-except Exception as e: print("blocked")' "$1"; }
+  s=socket.create_connection((sys.argv[2],int(sys.argv[1])),timeout=2); print(s.recv(64).decode())
+except Exception as e: print("blocked")' "$1" "${2:-192.0.2.1}"; }
+peer_udp() { ip netns exec $CL python3 -c 'import socket,sys
+s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)
+try:
+  s.sendto(b"q", (sys.argv[2],int(sys.argv[1]))); print(s.recv(64).decode())
+except Exception as e: print("blocked")' "$1" "${2:-192.0.2.1}"; }
 kit() { ip netns exec $S env PATH="$T/bin:$PATH" UNIT_DIR=$T/units SYSCTL_FILE=$T/sysctl.conf "$KIT" "$@" --prefix "$PFX" --probe-ns $PROBE; }
 fwd() { ip netns exec $S cat /proc/sys/net/ipv4/ip_forward; }
 fwd6() { ip netns exec $S cat /proc/sys/net/ipv6/conf/all/forwarding; }
@@ -83,6 +100,20 @@ ip netns exec $S nft delete rule inet srnet_seller postrouting_nat handle $(ip n
 out=$(kit check 2>&1) || true; grep -q "no IPv4 masquerade" <<<"$out" && ok "check catches a missing masquerade rule" || bad "$out"
 kit nat-up >/dev/null; kit check >/dev/null 2>&1 && ok "nat-up repairs both" || bad "nat-up did not repair"
 
+# 4b. forwarded DNS (public OK, private blocked)
+r=$(peer 53); [ "$r" = 192.0.2.10 ] && ok "tcp/53 to a public resolver is forwarded as the seller ($r)" || bad "tcp/53 got '$r'"
+r=$(peer_udp 53); [ "$r" = 192.0.2.10 ] && ok "udp/53 to a public resolver is forwarded as the seller ($r)" || bad "udp/53 got '$r'"
+r=$(peer 53 10.0.0.1); [ "$r" = blocked ] && ok "tcp/53 to a private address is not forwarded" || bad "private tcp/53 got '$r'"
+r=$(peer_udp 53 10.0.0.1); [ "$r" = blocked ] && ok "udp/53 to a private address is not forwarded" || bad "private udp/53 got '$r'"
+# host-granted client IPs skip the DNS rate-limit set
+A=yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.sesh
+kit allow --wan wan0 --ipv6 off "$A" >/dev/null
+ip netns exec $S nft list set inet srnet_seller unlimited4 | grep -q 10.193.255.254 \
+  && ok "allow pins the client and loads it into unlimited4" || bad "unlimited4 after allow"
+kit disallow --wan wan0 --ipv6 off "$A" >/dev/null
+ip netns exec $S nft list set inet srnet_seller unlimited4 2>/dev/null | grep -q 10.193.255.254 \
+  && bad "unlimited4 still has the address after disallow" || ok "disallow removes the pin from the NAT table"
+
 # 5. nat-down restores
 kit nat-down >/dev/null
 [ "$(fwd)" = 0 ] && ! ip netns exec $S nft list table inet srnet_seller >/dev/null 2>&1 && [ ! -f $PFX/state/forwarding.before ] \
@@ -100,7 +131,7 @@ ip netns exec $S nft list table inet srnet_seller | grep -q "ip6 saddr fd2e:7365
 kit check >/dev/null 2>&1 && ok "check passes with ipv6" || bad "check with ipv6"
 
 # 7. uninstall (systemctl stubbed) removes units, sysctl file, NAT; restores forwarding
-mkdir -p $T/bin $T/units; printf '#!/bin/sh\necho "systemctl $*" >> %s/systemctl.log\n' $T > $T/bin/systemctl; chmod +x $T/bin/systemctl
+: > $T/systemctl.log
 for u in srnet-exit srnet-exit-nat srnet-exit-dns srnet-exit-watcher; do touch $T/units/$u.service; done
 echo "net.ipv4.ip_forward = 1" > $T/sysctl.conf
 kit uninstall >/dev/null
