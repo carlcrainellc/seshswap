@@ -19,11 +19,13 @@ const testExit = "wo7xwuzostufug8ptrth5natahx53nug9jsazm783nere8rj68ky.sesh"
 
 // fakeRPC records exit calls; patched=false acts like a stock router.
 type fakeRPC struct {
-	mu       sync.Mutex
-	calls    []string
-	patched  bool
-	mapped   map[string]bool
-	noRoutes string // when set, list_exits says the routes are down, with this reason
+	mu        sync.Mutex
+	calls     []string
+	patched   bool
+	mapped    map[string]bool
+	noRoutes  string // when set, list_exits says the routes are down, with this reason
+	noSession bool   // the exit never answers: session_live false
+	mapErr    string // map_exit fails with this
 }
 
 func (f *fakeRPC) rpc(ep string) *exits.RouterRPC {
@@ -43,13 +45,17 @@ func (f *fakeRPC) rpc(ep string) *exits.RouterRPC {
 		}
 		switch m {
 		case "llarp.map_exit":
-			f.mapped[req.Address] = true
+			f.mapped[req.Address] = true // like the router: recorded even if the reply is lost
+			if f.mapErr != "" {
+				b, _ := json.Marshal(map[string]any{"error": f.mapErr})
+				return b, nil
+			}
 		case "llarp.unmap_exit":
 			delete(f.mapped, req.Address)
 		case "llarp.list_exits":
 			var ex []map[string]any
 			for a := range f.mapped {
-				ex = append(ex, map[string]any{"address": a, "session_live": true, "exit_capable": true})
+				ex = append(ex, map[string]any{"address": a, "session_live": !f.noSession, "exit_capable": !f.noSession})
 			}
 			out := map[string]any{"routes_up": f.noRoutes == "", "exits": ex}
 			if f.noRoutes != "" {

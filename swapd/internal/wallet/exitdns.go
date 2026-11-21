@@ -34,7 +34,16 @@ func (s *Server) dnsClient() dnsChanger {
 	return &sysdns.Client{}
 }
 
-func (s *Server) exitDNSOn() bool { return !strings.EqualFold(s.Cfg.ExitDNS, "off") }
+// exitDNSOn says whether the wallet switches system DNS itself while an exit
+// is connected. "off" leaves DNS alone. "router" means the router does it:
+// Rusty's Session Router service on Windows points this computer's DNS at
+// 127.0.0.1:53 and answers .sesh names and exit lookups itself, so the wallet
+// must not touch the adapters.
+func (s *Server) exitDNSOn() bool {
+	return !strings.EqualFold(s.Cfg.ExitDNS, "off") && !s.exitDNSByRouter()
+}
+
+func (s *Server) exitDNSByRouter() bool { return strings.EqualFold(s.Cfg.ExitDNS, "router") } // the page says so
 
 func (s *Server) dnsMarker() string { return filepath.Join(s.Cfg.DataDir, "exit-dns.json") }
 

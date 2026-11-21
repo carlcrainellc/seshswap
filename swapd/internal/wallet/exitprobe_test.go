@@ -2,6 +2,8 @@ package wallet
 
 import "context"
 
-// Unit tests have no internet: treat the exit traffic check as passing unless
-// a test sets its own.
-func init() { exitProbe = func(context.Context) error { return nil } }
+// No real network in tests: the probe "gets through" from a new IP.
+func init() {
+	exitProbe = func(context.Context) (string, error) { return "203.0.113.9", nil }
+	exitIPBefore = func(context.Context) string { return "" }
+}

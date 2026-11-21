@@ -12,3 +12,4 @@ swapd/bin/
 contracts/foundry.lock
 .build/
 dist/release/
+swapd/cmd/seshswap-setup/payload/

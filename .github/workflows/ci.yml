@@ -53,6 +53,27 @@ jobs:
         if: always()
         with: { name: go-logs, path: go-test.log }
 
+  windows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: swapd/go.mod, cache-dependency-path: swapd/go.sum }
+      - name: cross-build the Windows wallet, swapd and SeshSwap-setup.exe
+        working-directory: swapd
+        env: { GOOS: windows, GOARCH: amd64, CGO_ENABLED: "0" }
+        run: |
+          go build ./...
+          go build -trimpath -o ../seshswap.exe ./cmd/seshswap
+          go build -trimpath -o ../swapd.exe ./cmd/swapd
+          # The setup embeds payload/, which scripts/package-windows-setup.sh
+          # fills; an empty stand-in is enough to check that it compiles.
+          mkdir -p cmd/seshswap-setup/payload/wallet
+          touch cmd/seshswap-setup/payload/rusty-setup.exe cmd/seshswap-setup/payload/wallet/README.txt
+          go vet -tags seshswap_setup ./cmd/seshswap-setup
+          go build -tags seshswap_setup -trimpath -o ../SeshSwap-setup.exe ./cmd/seshswap-setup
+
   e2e:
     runs-on: ubuntu-24.04
     timeout-minutes: 75

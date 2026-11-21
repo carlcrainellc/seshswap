@@ -188,14 +188,20 @@ func (s *Server) seshLookup(ctx context.Context, host, port string) (string, err
 	case ModeExisting:
 		addr, err := s.ext.lookup(ctx, host, port, true)
 		if err != nil {
-			return "", &srouter.UserError{Msg: msgNoExisting, Err: err}
+			msg := msgNoExisting
+			if strings.Contains(err.Error(), errNoRoute.Error()) {
+				msg = msgExistingNoRoute
+			}
+			return "", &srouter.UserError{Msg: msg, Err: err}
 		}
 		s.setSource(SourceExisting)
 		return addr, nil
 	case ModeAuto:
 		// The bundled router already up (we started it for this swap): keep it.
 		if !s.router.Running() {
-			if addr, err := s.ext.lookup(ctx, host, port, false); err == nil {
+			// A request the user just made (Request quote, Swap) always re-checks
+			// the router; background traffic trusts a failure for 60 s.
+			if addr, err := s.ext.lookup(ctx, host, port, userInitiated(ctx)); err == nil {
 				s.setSource(SourceExisting)
 				return addr, nil
 			}
@@ -251,6 +257,17 @@ func (s *Server) curSource() string {
 }
 
 const msgNoExisting = "Couldn't find a working Session Router on this computer. Start yours, or choose Auto or Bundled in Settings."
+
+const msgExistingNoRoute = "Your Session Router answers .sesh names, but this computer can't reach the address it gives out. If you just unmapped an exit, restart Rusty (Restart-Service RustySessionRouter) and try again."
+
+type userReqKey struct{}
+
+// withUserInitiated marks ctx as a request the user just made.
+func withUserInitiated(ctx context.Context) context.Context {
+	return context.WithValue(ctx, userReqKey{}, true)
+}
+
+func userInitiated(ctx context.Context) bool { v, _ := ctx.Value(userReqKey{}).(bool); return v }
 
 const msgPrivateTimeout = "Couldn't reach the maker privately in time. The maker may be offline, or your internet is slow. Try again, or switch to Direct connection in Settings."
 
@@ -315,22 +332,27 @@ func (s *Server) connStatus() map[string]any {
 	if c := s.exitConnSnapshot(); c != nil {
 		out["source"] = c["source"]
 		out["exit"] = c["listingId"]
+		name := fmt.Sprint(c["name"])
+		title := strings.Replace(name, "exit #", "Exit #", 1) // at the start of a line
+		if title == name {
+			title = strings.Replace(name, "exit ", "Exit ", 1)
+		}
 		router := "bundled"
 		if c["source"] == SourceExisting {
-			router = "your Session Router"
+			router = routerLabel(SourceExisting)
 		}
 		switch c["phase"] {
 		case phaseUp:
 			out["state"] = string(srouter.Connected)
-			out["label"] = fmt.Sprintf("Connected through exit #%v (%s)", c["listingId"], router)
-			out["detail"] = "Stays up until you press Disconnect. Locking or closing the wallet disconnects it first."
+			out["label"] = fmt.Sprintf("Connected through %s (%s)", name, router)
+			out["detail"] = "Stays up until you press Unmap. Locking or closing the wallet unmaps it first."
 		case phaseNoRoutes:
 			out["state"] = string(srouter.Failed)
-			out["label"] = fmt.Sprintf("Exit #%v mapped, routes not up", c["listingId"])
+			out["label"] = title + " mapped, routes not up"
 			out["detail"] = fmt.Sprint(c["routesReason"])
 		default:
 			out["state"] = string(srouter.Connecting)
-			out["label"] = fmt.Sprintf("Exit #%v: waiting for this computer's routes…", c["listingId"])
+			out["label"] = title + ": waiting for this computer's routes…"
 		}
 		return out
 	}

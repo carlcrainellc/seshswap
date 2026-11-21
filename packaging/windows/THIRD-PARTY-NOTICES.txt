@@ -1,0 +1,15 @@
+SeshSwap @VERSION@ for Windows x64: what's in this download
+
+seshswap.exe
+  The wallet and launcher. MIT License (LICENSE), built from
+  github.com/carlcrainellc/seshswap. Go modules linked in are listed in NOTICE.
+
+monero/  monero-wallet-rpc @MONERO_VERSION@
+  The official Monero CLI build for Windows from getmonero.org, unmodified,
+  checked against binaryFate's signed hashes.txt. Copyright The Monero
+  Project and others as listed in monero/LICENSE. BSD 3-clause licence:
+  monero/LICENSE. Source: github.com/monero-project/monero (tag @MONERO_VERSION@).
+
+Session Router is not in this zip. It comes with Rusty
+(github.com/carlcrainellc/rusty-windows, GPL-3.0), which SeshSwap-setup.exe
+installs separately into C:\Rusty.

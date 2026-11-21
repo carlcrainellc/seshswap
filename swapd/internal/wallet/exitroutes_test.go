@@ -10,9 +10,7 @@ import (
 )
 
 func TestExitNotConnectedUntilRoutesUp(t *testing.T) {
-	old := exitRoutesWait
-	exitRoutesWait = 500 * time.Millisecond
-	t.Cleanup(func() { exitRoutesWait = old })
+	shortMapWait(t)
 	s, f := exitTestServer(t)
 	ctx := context.Background()
 	s.Cfg.Transport = ModeAuto
@@ -30,29 +28,30 @@ func TestExitNotConnectedUntilRoutesUp(t *testing.T) {
 	s.ex.dns = d
 	s.ex.linkFor = func(string) (string, error) { return "swrabc123", nil }
 
-	// routes don't come up: no Connected, no DNS change, the reason shown
+	// routes don't come up: an error, the exit is unmapped again, no DNS change
 	f.setNoRoutes("no default gateway")
 	c, err := s.connectExit(ctx, 4)
-	if err != nil {
+	if err == nil || c != nil {
+		t.Fatalf("connected without routes: %+v", c)
+	}
+	if !strings.Contains(err.Error(), "didn't come up (no default gateway)") || !strings.Contains(err.Error(), "normal connection is back") {
 		t.Fatal(err)
 	}
-	if c.Phase != phaseNoRoutes || c.RoutesUp || c.RoutesReason != "no default gateway" || !c.SessionLive || !c.ExitCapable {
-		t.Fatalf("conn %+v", c)
+	if f.seen("llarp.unmap_exit") != 1 || s.exitHoldsRouter() {
+		t.Fatalf("left mapped: unmaps %d", f.seen("llarp.unmap_exit"))
 	}
-	time.Sleep(200 * time.Millisecond)
 	if len(d.set) != 0 {
 		t.Fatalf("DNS switched without routes: %v", d.set)
 	}
-	if st := s.connStatus(); st["state"] == "connected" {
-		t.Fatalf("sidebar says connected: %v", st)
-	}
-	if m := s.exitsStatusMap()["connected"].(map[string]any); m["phase"] != phaseNoRoutes || m["routesReason"] != "no default gateway" {
-		t.Fatalf("status %v", m)
+	if st := s.connStatus(); st["exit"] != nil {
+		t.Fatalf("sidebar still shows the exit: %v", st)
 	}
 
-	// they come up: now connected, and DNS switches
+	// routes up: connected, and DNS switches
 	f.setNoRoutes("")
-	s.exitTick()
+	if _, err := s.connectExit(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
 	waitDNS(t, s, "on")
 	if st := s.connStatus(); st["state"] != "connected" {
 		t.Fatalf("sidebar %v", st)
@@ -74,6 +73,134 @@ func TestExitNotConnectedUntilRoutesUp(t *testing.T) {
 	waitDNS(t, s, "on")
 	if len(d.set) != 2 {
 		t.Fatalf("set %v", d.set)
+	}
+}
+
+func shortMapWait(t *testing.T) {
+	t.Helper()
+	old, oldR := exitMapWait, exitRoutesWait
+	exitMapWait, exitRoutesWait = 1500*time.Millisecond, 500*time.Millisecond
+	t.Cleanup(func() { exitMapWait, exitRoutesWait = old, oldR })
+}
+
+// mapByAddr maps testExit through the exits panel and returns the HTTP result.
+func mapByAddr(t *testing.T, s *Server) (int, map[string]any) {
+	t.Helper()
+	return do(t, s.Handler(), "POST", "/v1/exits/map", `{"address":"`+testExit+`"}`, "")
+}
+
+// The exit never answers (say it is down): after the map
+// wait the wallet unmaps it and says so, instead of sitting on "Mapping".
+func TestExitMapRollsBackWhenExitNotAnswering(t *testing.T) {
+	shortMapWait(t)
+	s, f := exitTestServer(t)
+	s.Cfg.Transport = ModeAuto
+	f.noSession = true
+	start := time.Now()
+	code, m := mapByAddr(t, s)
+	if code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "isn't answering (no path to it after 1 s)") {
+		t.Fatalf("%d %v", code, m)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("took %s", time.Since(start))
+	}
+	f.mu.Lock()
+	left := len(f.mapped)
+	f.mu.Unlock()
+	if left != 0 || f.seen("llarp.unmap_exit") != 1 {
+		t.Fatalf("still mapped on the router: %d", left)
+	}
+	if st := s.exitsStatusMap(); st["connected"] != nil {
+		t.Fatalf("status still shows a connection: %v", st)
+	}
+}
+
+// map_exit itself keeps failing: still unmapped at the end (the router may
+// have recorded it), with the router's error in the message.
+func TestExitMapErrorUnmaps(t *testing.T) {
+	shortMapWait(t)
+	s, f := exitTestServer(t)
+	s.Cfg.Transport = ModeAuto
+	f.mapErr = "no path to exit"
+	code, m := mapByAddr(t, s)
+	if code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "no path to exit") {
+		t.Fatalf("%d %v", code, m)
+	}
+	f.mu.Lock()
+	left := len(f.mapped)
+	f.mu.Unlock()
+	if left != 0 {
+		t.Fatal("left mapped after a failed map")
+	}
+}
+
+// Another VPN holds the route: Rusty's preflight says so and nothing is mapped.
+func TestExitMapRefusedUnderOtherVPN(t *testing.T) {
+	s, f := exitTestServer(t)
+	s.Cfg.ExitRouterRPC = "tcp://127.0.0.1:1190"
+	old := MapPreflight
+	t.Cleanup(func() { MapPreflight = old })
+	msg := "Another VPN is still holding your connection (NordVPN). Disconnect it or turn off its kill switch, then map again."
+	MapPreflight = func(context.Context) (string, []string, error) { return msg, nil, nil }
+	rt := exitRoute{Source: SourceExisting, RPC: s.Cfg.ExitRouterRPC}
+	mk := func() *exitConn { return &exitConn{ExitSesh: testExit, Source: SourceExisting} }
+	if _, err := s.mapOn(context.Background(), rt, mk()); err == nil || err.Error() != msg {
+		t.Fatalf("got %v", err)
+	}
+	if f.seen("llarp.map_exit") != 0 {
+		t.Fatal("mapped anyway")
+	}
+	// VPN off: the preflight passes and the map goes ahead.
+	MapPreflight = func(context.Context) (string, []string, error) { return "", nil, nil }
+	if _, err := s.mapOn(context.Background(), rt, mk()); err != nil {
+		t.Fatal(err)
+	}
+	if f.seen("llarp.map_exit") != 1 {
+		t.Fatal("didn't map")
+	}
+}
+
+// Routes "up" but the public IP didn't change: traffic isn't going through
+// the exit (another VPN's routes win). Unmapped, with an error.
+func TestExitMapFailsWhenIPUnchanged(t *testing.T) {
+	shortMapWait(t)
+	s, f := exitTestServer(t)
+	s.Cfg.Transport = ModeAuto
+	oldB, oldP := exitIPBefore, exitProbe
+	t.Cleanup(func() { exitIPBefore, exitProbe = oldB, oldP })
+	exitIPBefore = func(context.Context) string { return "198.51.100.7" }
+	exitProbe = func(context.Context) (string, error) { return "198.51.100.7", nil }
+	code, m := mapByAddr(t, s)
+	if code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "Couldn't reach the internet through") {
+		t.Fatalf("%d %v", code, m)
+	}
+	f.mu.Lock()
+	left := len(f.mapped)
+	f.mu.Unlock()
+	if left != 0 {
+		t.Fatal("left mapped")
+	}
+}
+
+// Rusty's exit guard unmaps a connected exit (it stopped answering, or a VPN
+// came on): the wallet notices, drops it and shows Rusty's reason.
+func TestExitGoneUnderneathShowsRustyReason(t *testing.T) {
+	s, f := exitTestServer(t)
+	s.Cfg.Transport = ModeAuto
+	if code, m := mapByAddr(t, s); code != 200 {
+		t.Fatalf("%d %v", code, m)
+	}
+	old := LastRollback
+	t.Cleanup(func() { LastRollback = old })
+	why := "Exit 9khgtg5q…xcbhcto stopped answering, so it was unmapped. Your normal connection is back."
+	LastRollback = func() (string, time.Time) { return why, time.Now() }
+	f.mu.Lock()
+	f.mapped = map[string]bool{}
+	f.mu.Unlock()
+	s.exitTick()
+	st := s.exitsStatusMap()
+	if st["connected"] != nil || !strings.Contains(fmt.Sprint(st["last"]), "stopped answering") {
+		t.Fatalf("%v", st)
 	}
 }
 

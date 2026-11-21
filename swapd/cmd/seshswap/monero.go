@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/carlcrainellc/seshswap/swapd/internal/xmr"
@@ -160,12 +159,11 @@ func startMonero(ctx context.Context, bin, dataDir, daemon, nettype string, logL
 	}
 	m.cmd = exec.Command(bin, "--config-file", confPath)
 	m.cmd.Dir = runDir
-	// Own process group (Ctrl-C reaches us first and we stop it cleanly), and
-	// it dies with us if we crash.
-	m.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
+	moneroProcAttr(m.cmd) // own process group; see moneroStarted for dying with us
 	if err := m.cmd.Start(); err != nil {
 		return nil, err
 	}
+	moneroStarted(m.cmd)
 	go func() { _ = m.cmd.Wait(); close(m.done) }()
 
 	// Ready when it answers get_version with our login.
@@ -219,7 +217,7 @@ func (m *moneroRPC) Stop() {
 	select {
 	case <-m.done:
 	case <-time.After(wait):
-		_ = m.cmd.Process.Signal(syscall.SIGTERM)
+		stopChild(m.cmd.Process)
 		select {
 		case <-m.done:
 		case <-time.After(5 * time.Second):

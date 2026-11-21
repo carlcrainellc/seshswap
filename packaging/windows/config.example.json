@@ -1,0 +1,16 @@
+{
+  "listen": "127.0.0.1:7676",
+  "chain": "arbitrum-sepolia",
+  "ethRpc": "https://sepolia-rollup.arbitrum.io/rpc",
+  "ethRpcs": ["https://arbitrum-sepolia-rpc.publicnode.com"],
+  "xmrDaemons": [
+    "http://node.monerodevs.org:38089",
+    "http://node2.monerodevs.org:38089"
+  ],
+  "faucetUrl": "https://faucet.seshswap.app",
+  "transport": "existing",
+  "exitRouterRpc": "tcp://127.0.0.1:1190",
+  "seshDns": "127.0.0.1:53",
+  "exitDns": "router",
+  "openBrowser": true
+}

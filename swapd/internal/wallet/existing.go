@@ -45,6 +45,7 @@ type existingRouter struct {
 	failAt    time.Time
 	lastErr   string
 	connected bool
+	v4        bool // the IPv6 address the router hands out isn't reachable here; use ipv4.<name>
 }
 
 type candidate struct{ dns, kind string }
@@ -84,6 +85,28 @@ func (e *existingRouter) markResult(err error) {
 	e.lastErr = err.Error()
 }
 
+// reset forgets the working candidate and any recent failure. Called when this
+// computer's routes change (exit mapped or unmapped): what failed a moment ago
+// may work now, and the other way round.
+func (e *existingRouter) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.dns, e.kind, e.v4 = "", "", false
+	e.failAt = time.Time{}
+	e.lastErr = ""
+	e.connected = false
+}
+
+// v4Name is the name Session Router answers with an A record: plain .sesh
+// names only get an AAAA in the router's fd2e:: range.
+func v4Name(host string) string {
+	h := strings.ToLower(host)
+	if strings.HasPrefix(h, "ipv4.") || !(strings.HasSuffix(h, ".sesh") || strings.HasSuffix(h, ".snode")) {
+		return ""
+	}
+	return "ipv4." + host
+}
+
 func (e *existingRouter) candidates() []candidate {
 	var out []candidate
 	seen := map[string]bool{}
@@ -116,6 +139,7 @@ func (e *existingRouter) candidates() []candidate {
 func (e *existingRouter) lookup(ctx context.Context, host, port string, force bool) (string, error) {
 	e.mu.Lock()
 	dns := e.dns
+	v4 := e.v4
 	retry := e.retryAfter
 	if retry == 0 {
 		retry = 60 * time.Second
@@ -124,8 +148,12 @@ func (e *existingRouter) lookup(ctx context.Context, host, port string, force bo
 	e.mu.Unlock()
 
 	if dns != "" {
+		name := host
+		if n := v4Name(host); v4 && n != "" {
+			name = n
+		}
 		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		addr, err := sesh.ResolveVia(lctx, dns, host, port)
+		addr, err := sesh.ResolveVia(lctx, dns, name, port)
 		cancel()
 		if err == nil {
 			return addr, nil
@@ -137,13 +165,13 @@ func (e *existingRouter) lookup(ctx context.Context, host, port string, force bo
 
 	var errs []string
 	for _, c := range e.candidates() {
-		addr, err := e.probe(ctx, c.dns, host, port)
+		addr, v4, err := e.probe(ctx, c.dns, host, port)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s (%s): %v", c.dns, c.kind, err))
 			continue
 		}
 		e.mu.Lock()
-		e.dns, e.kind, e.okAt, e.lastErr = c.dns, c.kind, time.Now(), ""
+		e.dns, e.kind, e.okAt, e.lastErr, e.v4 = c.dns, c.kind, time.Now(), "", v4
 		e.mu.Unlock()
 		return addr, nil
 	}
@@ -156,17 +184,22 @@ func (e *existingRouter) lookup(ctx context.Context, host, port string, force bo
 	return "", err
 }
 
+// errNoRoute: the router answered the name, but no connection to the address
+// it gave opens (on Windows: Rusty lost its TUN's IPv6 address after an exit
+// was unmapped, so fd2e:: has no route).
+var errNoRoute = errors.New("resolves the name but can't connect to the maker")
+
 // probe resolves host via dns and opens (then closes) a TCP connection to
-// the result, so "working" means the router actually reaches the maker.
-func (e *existingRouter) probe(ctx context.Context, dns, host, port string) (string, error) {
+// the result, so "working" means the router actually reaches the maker. If
+// the (IPv6) address fails, it tries the router's IPv4 mapping of the same
+// name (ipv4.<name>); v4 says that is the one that worked.
+func (e *existingRouter) probe(ctx context.Context, dns, host, port string) (addr string, v4 bool, err error) {
 	lctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	addr, err := sesh.ResolveVia(lctx, dns, host, port)
+	addr, err = sesh.ResolveVia(lctx, dns, host, port)
 	cancel()
 	if err != nil {
-		return "", errors.New("doesn't resolve .sesh names")
+		return "", false, errors.New("doesn't resolve .sesh names")
 	}
-	dctx, cancel2 := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel2()
 	dial := e.dial
 	if dial == nil {
 		dial = func(ctx context.Context, a string) error {
@@ -177,10 +210,26 @@ func (e *existingRouter) probe(ctx context.Context, dns, host, port string) (str
 			return err
 		}
 	}
-	if err := dial(dctx, addr); err != nil {
-		return "", errors.New("resolves the name but can't connect to the maker")
+	dctx, cancel2 := context.WithTimeout(ctx, 10*time.Second)
+	err = dial(dctx, addr)
+	cancel2()
+	if err == nil {
+		return addr, false, nil
 	}
-	return addr, nil
+	if n := v4Name(host); n != "" {
+		lctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		a4, rerr := sesh.ResolveVia(lctx, dns, n, port)
+		cancel()
+		if rerr == nil && a4 != addr {
+			dctx, cancel2 := context.WithTimeout(ctx, 10*time.Second)
+			derr := dial(dctx, a4)
+			cancel2()
+			if derr == nil {
+				return a4, true, nil
+			}
+		}
+	}
+	return "", false, fmt.Errorf("%w (%s: %v)", errNoRoute, addr, err)
 }
 
 // loopbackNameservers returns host:53 for every resolv.conf nameserver that

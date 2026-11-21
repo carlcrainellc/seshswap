@@ -168,6 +168,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/exits/disconnect", s.wrap(s.exitsDisconnect))
 	mux.HandleFunc("/v1/exits/topup", s.wrap(s.exitsTopUp))
 	mux.HandleFunc("/v1/exits/quote", s.wrap(s.exitsQuote))
+	mux.HandleFunc("/v1/exits/router", s.wrap(s.exitsRouter))
+	mux.HandleFunc("/v1/exits/unmap", s.wrap(s.exitsUnmap))
+	mux.HandleFunc("/v1/exits/map", s.wrap(s.exitsMap))
 	mux.HandleFunc("/v1/satchel/propose", s.wrap(s.satchelPropose))
 	mux.HandleFunc("/v1/satchel/pending", s.wrap(s.satchelPending))
 	mux.HandleFunc("/v1/satchel/approve", s.wrap(s.satchelApprove))
@@ -198,7 +201,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	s.cleanStaleRouter()
 	s.recoverDNS()
-	go s.reconcileLoop(ctx)
+	loopDone := make(chan struct{})
+	go func() { s.reconcileLoop(ctx); close(loopDone) }()
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
@@ -222,6 +226,16 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	s.logf("swap wallet listening on http://%s  (data %s)", s.Cfg.Listen, s.Cfg.DataDir)
 	err = srv.Serve(ln)
+	if err == http.ErrServerClosed {
+		// The reconcile loop unmaps the exit on its way out: a router the
+		// wallet didn't start (Rusty's service keeps running) would otherwise
+		// keep this computer's traffic going through it. Wait, but not forever.
+		select {
+		case <-loopDone:
+		case <-time.After(10 * time.Second):
+			s.logf("still unmapping the exit at shutdown; leaving it")
+		}
+	}
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -720,7 +734,7 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A cold private start is about 3 s, but allow for slow paths.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(withUserInitiated(r.Context()), 60*time.Second)
 	defer cancel()
 	var quotes []*makerQuote
 	regErr := ""

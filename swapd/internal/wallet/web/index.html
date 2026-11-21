@@ -475,7 +475,7 @@ function settings() {
     <h1 class="h1">Settings</h1>
     <div class="card stack">
       <div><label>Network</label><div>${esc(st.network)}</div></div>
-      ${(st.connection||{}).exit ? `<div class="banner" data-testid="settings-exit-note">Exit #${esc(st.connection.exit)} is connected. The private connection stays up until you press Disconnect on the Exits screen; locking or closing the wallet disconnects the exit first and puts DNS back.</div>` : ""}
+      ${(st.connection||{}).exit ? `<div class="banner" data-testid="settings-exit-note">Exit #${esc(st.connection.exit)} is connected. The private connection stays up until you press Unmap on the Exits screen; locking or closing the wallet disconnects the exit first and puts DNS back.</div>` : ""}
       <div><label>Connection to the maker</label>
         ${[
           ["auto","Auto (recommended). Uses your own Session Router if one is already running on this computer and reaches the maker. Otherwise starts the bundled one only while you get a quote or swap. Hides your IP address from the maker."],
@@ -544,8 +544,8 @@ function exitsScreen() {
         <input type="number" min="1" max="${e.maxHours}" value="${esc(d["h"+e.id]||1)}" id="hours-${e.id}" data-testid="exit-hours" style="width:70px"> h
         <select id="asset-${e.id}" data-testid="exit-asset">${e.usdcPerHour?`<option value="usdc">USDC</option>`:""}${e.ethPerHour?`<option value="eth">ETH</option>`:""}</select>
         <button class="btn ghost" data-exit-buy="${e.id}" data-testid="exit-buy">Buy</button></div>` : `<span class="a">${esc(e.why||"not for sale")}</span>`;
-    const conn = c && c.listingId===e.id ? (c.phase==="up" ? `<span class="chip on">connected</span>` : c.phase==="noroutes" ? `<span class="chip">routes not up</span>` : c.phase==="testing" ? `<span class="chip">testing</span>` : `<span class="chip">waiting for routes</span>`)
-      : until ? `<button class="btn" data-exit-connect="${e.id}" data-testid="exit-connect">Connect</button><div class="a">paid until ${esc(ctTime(until))}</div>` : "";
+    const conn = c && c.listingId===e.id ? (c.phase==="up" ? `<span class="chip on">mapped · routes up</span>` : c.phase==="noroutes" ? `<span class="chip">routes not up</span>` : c.phase==="testing" ? `<span class="chip">testing</span>` : `<span class="chip">waiting for routes</span>`)
+      : until ? `<button class="btn" data-exit-connect="${e.id}" data-testid="exit-connect">Map</button><div class="a">paid until ${esc(ctTime(until))}</div>` : "";
     return `<tr data-testid="exit-row">
       <td>#${esc(e.id)}</td>
       <td><div class="mono">${esc(short(e.sesh))}</div><div class="a">${info.country&&info.country!=="XX"?"Country "+esc(info.country)+" · ":""}web only (ports 80 and 443)${info.dns?" · own DNS "+esc(info.dns):""}${info.note?" · "+esc(info.note):""}</div></td>
@@ -559,12 +559,13 @@ function exitsScreen() {
     <h1 class="h1">Exits</h1>
     <p class="lead">Rent a Session Router exit by the hour. Websites then see the exit's address instead of yours.</p>
     <ul class="a" data-testid="exit-warnings" style="margin:0 0 12px 18px;padding:0">
-      <li>Connecting installs a default route: all of this computer's traffic goes to the exit.</li>
-      <li>The exit carries web traffic (ports 80 and 443) and its own DNS only. Other programs (mail, SSH, games, an Ethereum node on 8545) stall until you disconnect.</li>
+      <li>Map sends all of this computer's traffic to the exit (full tunnel). Unmap puts it back.</li>
+      <li>The exit carries web traffic (ports 80 and 443) and its own DNS only. Other programs (mail, SSH, games, an Ethereum node on 8545) stall until you unmap.</li>
       <li>Paid hours are spent either way. They are not refunded if the exit goes down, and nothing renews by itself.</li>
-      <li>The wallet says Connected only once this computer's routes are up.</li>
+      <li>The wallet says Connected only once this computer's routes are up. Quitting or locking the wallet unmaps the exit.</li>
     </ul>
     ${state.exitConfirm ? exitConfirmCard() : ""}
+    ${exitRouterCard()}
     ${c ? exitConnCard(c) : ""}
     ${x.busy || state.exitBusy ? `<div class="banner">${esc(state.exitBusy||"Working…")}</div>` : ""}
     <div class="card stack" style="margin-top:14px">
@@ -578,33 +579,64 @@ function exitsScreen() {
 }
 function check(ok, text, extra){ return `<div class="a">${ok?"✓":"✗"} ${esc(text)}${extra?` <span class="mono">${esc(extra)}</span>`:""}</div>`; }
 function exitConnCard(c) {
+  const nm = c.listingId ? "exit #"+c.listingId : short(c.exitSesh);
   const head = c.phase==="up"
-    ? `<div class="conn connected"><i></i><div>Connected to exit #${esc(c.listingId)} <small>${esc(leftText(c.secondsLeft))} left · ends ${esc(ctTime(c.end))} · through ${c.source==="existing"?"your own":"the bundled"} Session Router</small></div></div>`
+    ? `<div class="conn connected"><i></i><div>Connected to ${c.listingId?"exit #"+esc(c.listingId):esc(short(c.exitSesh))} <small>${c.paid ? esc(leftText(c.secondsLeft))+" left · ends "+esc(ctTime(c.end)) : "no paid time (open or allowed exit)"} · through ${c.source==="existing"?((state.exitRouter||{}).label||"your own Session Router"):"the bundled Session Router"}</small></div></div>`
     : c.phase==="noroutes"
-    ? `<div class="conn error"><i></i><div>Not connected: this computer's routes aren't up <small>exit #${esc(c.listingId)} is mapped · paid until ${esc(ctTime(c.end))}</small></div></div>`
+    ? `<div class="conn error"><i></i><div>Not connected: this computer's routes aren't up <small>${esc(nm)} is mapped${c.paid?" · paid until "+esc(ctTime(c.end)):""}</small></div></div>`
     : c.phase==="testing"
-    ? `<div class="conn connecting"><i></i><div>Testing a request through the exit… <small>exit #${esc(c.listingId)}</small></div></div>`
-    : `<div class="conn connecting"><i></i><div>Waiting for this computer's routes… <small>exit #${esc(c.listingId)}</small></div></div>`;
+    ? `<div class="conn connecting"><i></i><div>Testing a request through the exit… <small>${esc(nm)}</small></div></div>`
+    : `<div class="conn connecting"><i></i><div>Waiting for this computer's routes… <small>${esc(nm)}</small></div></div>`;
   const checks = `<div data-testid="exit-checks">
       ${check(c.sessionLive, "Session to the exit is up")}
       ${check(c.exitCapable, "The exit accepts traffic")}
       ${check(c.routesUp, c.routesUp ? "This computer's routes are installed" : "This computer's routes are not installed", c.routesUp ? "" : c.routesReason)}</div>`;
-  const dns = c.phase!=="up" ? `<div class="a" data-testid="exit-dns">System DNS was not changed. It switches to the exit's resolver only once the routes are up.</div>`
+  const dns = c.dnsByRouter ? `<div class="a" data-testid="exit-dns">DNS: lookups go to ${esc((state.exitRouter||{}).label||"the Session Router")}, which asks a public resolver through the exit. The wallet doesn't change system DNS.</div>`
+    : c.phase!=="up" ? `<div class="a" data-testid="exit-dns">System DNS was not changed. It switches to the exit's resolver only once the routes are up.</div>`
     : !c.dns ? ""
     : c.dnsState === "on" ? `<div class="a" data-testid="exit-dns">This computer's DNS uses the exit's resolver <span class="mono">${esc(c.dns)}</span> while connected. It goes back when you disconnect.</div>`
     : c.dnsState === "switching" ? `<div class="a" data-testid="exit-dns">Switching this computer's DNS to the exit's resolver <span class="mono">${esc(c.dns)}</span>…</div>`
     : `<div class="a" data-testid="exit-dns">To keep lookups on the exit, set your DNS to its resolver <span class="mono">${esc(c.dns)}</span> while connected.${(c.dnsState||"").startsWith("failed") ? ` The wallet couldn't do it: ${esc(c.dnsState.slice(8))}` : ""}</div>`;
-  const acts = c.phase==="noroutes"
+  const acts = c.phase==="noroutes" && c.listingId
     ? `<button class="btn" data-exit-connect="${c.listingId}" data-testid="exit-retry">Retry</button>`
+    : !c.paid ? ""
     : `<button class="btn${c.expiring ? "" : " ghost"}" data-act="exit-topup" data-testid="exit-topup">Add 1 hour${c.topUpPrice ? ` · ${esc(c.topUpPrice)}` : ""}</button>`;
   return `<div class="card stack" data-testid="exit-connected" data-phase="${esc(c.phase)}">
       ${head}${checks}
-      ${c.phase==="up" ? `<div class="a" data-testid="exit-route">The default route goes through the exit. Web (80/443) and the exit's DNS work; anything else is dropped until you disconnect.</div>` : ""}
+      ${c.phase==="up" ? `<div class="a" data-testid="exit-route">The default route goes through the exit. Web (80/443) and the exit's DNS work; anything else is dropped until you unmap.</div>` : ""}
       ${dns}
       ${c.expiring ? `<div class="banner" data-testid="exit-expiring">Your time ends in ${esc(leftText(c.secondsLeft))} (${esc(ctTime(c.end))}). Add an hour to stay connected.</div>` : ""}
       <div class="actions">${acts}
-        <button class="btn ghost" data-act="exit-disconnect" data-testid="exit-disconnect">Disconnect</button></div>
+        <button class="btn ghost" data-act="exit-disconnect" data-testid="exit-disconnect">Unmap</button></div>
     </div>`;
+}
+// What the router itself says: mapped or not, and this computer's exit routes.
+function exitRouterCard() {
+  const r = state.exitRouter;
+  if (!r) return "";
+  const x = state.exits || {}, now = x.now || Math.floor(Date.now()/1000);
+  const leased = (x.leases||[]).filter(l => l.end>now);
+  const mapped = r.mapped || [];
+  const head = !r.reachable
+    ? `<div class="conn error"><i></i><div>Router: ${esc(r.error||"not reachable")}</div></div>`
+    : mapped.length
+    ? `<div class="conn ${r.routesUp||!r.routesKnown?"connected":"error"}"><i></i><div>Mapped <small>${esc(r.label)}</small></div></div>`
+    : `<div class="conn"><i></i><div>Unmapped <small>${esc(r.label)} · traffic goes out your normal connection</small></div></div>`;
+  const routes = !r.reachable || !mapped.length ? ""
+    : !r.routesKnown ? `<div class="a">Exit routes: this router build doesn't report them</div>`
+    : `<div class="a" data-testid="router-routes">Exit routes: ${r.routesUp ? "✓ up" : "✗ down"}${!r.routesUp && r.routesReason ? ` <span class="mono">${esc(r.routesReason)}</span>` : ""}</div>`;
+  const rows = mapped.map(m => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap" data-testid="router-mapped">
+      <span class="mono">${esc(short(m.address))}</span>${m.wallet?` <span class="a">this wallet's connection${m.listingId?" · exit #"+esc(m.listingId):""}</span>`:m.listingId?` <span class="a">exit #${esc(m.listingId)} · mapped outside the wallet</span>`:` <span class="a">mapped outside the wallet</span>`}
+      <span class="a">${m.sessionLive?"session up":"no session yet"}${m.ranges&&m.ranges.length?" · "+esc(m.ranges.join(", ")):""}</span>
+      <button class="btn ghost" data-exit-unmap="${esc(m.address)}" data-testid="router-unmap">Unmap</button></div>`).join("");
+  const mapBtns = !mapped.length && r.reachable && leased.length && !x.connected
+    ? `<div class="actions">${[...new Set(leased.map(l=>l.listingId))].map(id => `<button class="btn" data-exit-connect="${id}" data-testid="router-map">Map exit #${esc(id)} (full tunnel)</button>`).join("")}</div>` : "";
+  const byAddr = !mapped.length && r.reachable && !x.connected
+    ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="map-addr" data-testid="map-addr" placeholder="exit address….sesh" style="min-width:320px" value="${esc(state.mapAddr||"")}">
+        <button class="btn ghost" data-act="exit-map-addr" data-testid="map-addr-go">Map</button></div>
+      <div class="a">Map any exit by its address: time you paid for is used, otherwise it works on an open exit or one whose operator allowed your address.</div>` : "";
+  const self = r.self ? `<div class="a">This router's address: <span class="mono" data-testid="router-self">${esc(r.self)}</span> <button class="btn ghost" data-copy="${esc(r.self)}">Copy</button></div>` : "";
+  return `<div class="card stack" data-testid="exit-router" data-mapped="${mapped.length?"yes":"no"}">${head}${routes}${rows}${mapBtns}${byAddr}${self}</div>`;
 }
 function exitConfirmCard() {
   const q = state.exitConfirm;
@@ -618,11 +650,12 @@ function exitConfirmCard() {
         <button class="btn ghost" data-act="exit-confirm-cancel" data-testid="exit-confirm-cancel">Cancel</button></div>
     </div>`;
 }
-async function loadExits(){ state.exits = await api("/v1/exits"); }
+async function loadExits(){ state.exits = await api("/v1/exits"); await loadExitRouter(); }
+async function loadExitRouter(){ try { state.exitRouter = await api("/v1/exits/router"); } catch(e) { state.exitRouter = {reachable:false, error:e.message, mapped:[]}; } }
 let exitTimer;
 function startExitPoll(){ if (exitTimer) clearInterval(exitTimer); exitTimer = setInterval(async () => {
   if (state.screen !== "exits") { clearInterval(exitTimer); exitTimer = null; return; }
-  try { const st = await api("/v1/exits/status"); state.exits = {...(state.exits||{}), ...st}; if (!st.connected) delete state.exits.connected; if (!state.exitBusy || state.exitConnecting) render(); } catch(e) {}
+  try { const st = await api("/v1/exits/status"); state.exits = {...(state.exits||{}), ...st}; if (!st.connected) delete state.exits.connected; if (!state.exitBusy || state.exitConnecting) await loadExitRouter(); if (!state.exitBusy || state.exitConnecting) render(); } catch(e) {}
 }, 5000); }
 async function exitBuy(id) {
   const hours = Number(($("#hours-"+id)||{}).value||1), asset = ($("#asset-"+id)||{}).value||"usdc";
@@ -645,10 +678,16 @@ async function exitPay() {
   } catch(e) { state.err = e.message; }
   state.exitBusy = ""; render();
 }
-async function exitConnect(id) {
-  state.err = ""; state.exitConnecting = true; state.exitBusy = `Connecting to exit #${id}… (the first path can take up to a minute, then up to 30 seconds for this computer's routes and 30 seconds to test a request through it)`; render();
-  try { await api("/v1/exits/connect", {method:"POST", body: JSON.stringify({listingId:id})}); await loadExits(); }
+async function exitUnmap(addr) {
+  state.err = ""; state.exitBusy = "Unmapping…"; render();
+  try { const st = await api("/v1/exits/unmap", {method:"POST", body: JSON.stringify({address:addr})}); state.exits = {...(state.exits||{}), ...st}; if (!st.connected) delete state.exits.connected; if (st.router) state.exitRouter = st.router; }
   catch(e) { state.err = e.message; }
+  state.exitBusy = ""; render();
+}
+async function exitConnect(id) {
+  state.err = ""; state.exitConnecting = true; state.exitBusy = `Mapping exit #${id}… (up to 90 seconds. If it doesn't come up, it's unmapped and your normal connection stays.)`; render();
+  try { await api("/v1/exits/connect", {method:"POST", body: JSON.stringify({listingId:id})}); await loadExits(); }
+  catch(e) { state.err = e.message; try { await loadExits(); } catch(_) {} }
   state.exitConnecting = false; state.exitBusy = ""; render();
 }
 
@@ -674,6 +713,7 @@ function render() {
   el.querySelectorAll("[data-copy]").forEach(b => b.addEventListener("click", () => copy(b.dataset.copy)));
   el.querySelectorAll("[data-exit-buy]").forEach(b => b.addEventListener("click", () => exitBuy(Number(b.dataset.exitBuy))));
   el.querySelectorAll("[data-exit-connect]").forEach(b => b.addEventListener("click", () => exitConnect(Number(b.dataset.exitConnect))));
+  el.querySelectorAll("[data-exit-unmap]").forEach(b => b.addEventListener("click", () => exitUnmap(b.dataset.exitUnmap)));
 }
 
 async function go(name, id) {
@@ -809,6 +849,13 @@ async function act(name) {
     }
     if (name === "exit-confirm-pay") { await exitPay(); return; }
     if (name === "exit-confirm-cancel") { state.exitConfirm = null; }
+    if (name === "exit-map-addr") {
+      const a = ($("#map-addr")||{}).value||""; state.mapAddr = a.trim();
+      state.exitConnecting = true; state.exitBusy = "Mapping the exit… (up to 90 seconds. If it doesn't come up, it's unmapped and your normal connection stays.)"; render();
+      try { await api("/v1/exits/map", {method:"POST", body: JSON.stringify({address:state.mapAddr})}); await loadExits(); }
+      catch(e) { try { await loadExits(); } catch(_) {} throw e; }
+      finally { state.exitConnecting = false; state.exitBusy = ""; }
+    }
     if (name === "exit-disconnect") {
       await api("/v1/exits/disconnect", {method:"POST", body:"{}"});
       await loadExits();

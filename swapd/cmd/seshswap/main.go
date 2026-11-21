@@ -1,10 +1,11 @@
-// Command seshswap is the one-download Linux build of the SeshSwap wallet.
+// Command seshswap is the one-download build of the SeshSwap wallet, for
+// Linux and for Windows.
 //
 // It runs the wallet page on 127.0.0.1 with the testnet settings built in,
 // starts the bundled monero-wallet-rpc (stagenet) and stops it on exit, uses
-// the bundled Session Router for private swaps, and opens your browser.
-// Nothing to edit: an optional config.json in the data dir (~/.seshswap)
-// overrides any setting.
+// a Session Router for private swaps (on Linux the bundled one, on Windows
+// Rusty's service; see os_linux.go and os_windows.go), and opens your browser.
+// Nothing to edit: an optional config.json in the data dir overrides any setting.
 //
 // Testnets only (Arbitrum Sepolia, Sepolia, Monero stagenet). Not audited.
 package main
@@ -20,11 +21,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -74,7 +73,9 @@ func main() {
 		case "setup-router":
 			os.Exit(setupRouter())
 		case "check":
-			os.Exit(check())
+			code := check()
+			pauseIfOwnConsole(true)
+			os.Exit(code)
 		case "stop":
 			os.Exit(stopRunning(dataDirFromArgs(os.Args[2:])))
 		case "version", "--version", "-version":
@@ -82,7 +83,9 @@ func main() {
 			return
 		}
 	}
-	os.Exit(run())
+	code := run()
+	pauseIfOwnConsole(code != 0)
+	os.Exit(code)
 }
 
 func bundleDir() string {
@@ -96,14 +99,6 @@ func bundleDir() string {
 	return filepath.Dir(exe)
 }
 
-func defaultDataDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".seshswap"
-	}
-	return filepath.Join(home, ".seshswap")
-}
-
 func dataDirFromArgs(args []string) string {
 	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
 	d := fs.String("data", defaultDataDir(), "data directory")
@@ -113,20 +108,11 @@ func dataDirFromArgs(args []string) string {
 
 func run() int {
 	cfgPath := flag.String("config", "", "config JSON with overrides (default: <data>/config.json if it exists)")
-	data := flag.String("data", "", "data directory (default ~/.seshswap)")
+	data := flag.String("data", "", "data directory (default "+defaultDataDir()+")")
 	listen := flag.String("listen", "", "page address, 127.0.0.1:port (default 127.0.0.1:7676)")
 	noBrowser := flag.Bool("no-browser", false, "don't open the browser; just print the address")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `SeshSwap %s (testnet)
-
-  seshswap                 start the wallet and open it in your browser
-  seshswap setup-router    one-time permission for private swaps (asks for sudo)
-  seshswap stop            stop a running SeshSwap
-  seshswap check           check that the bundled programs run on this computer
-  seshswap version
-
-Options:
-`, version)
+		fmt.Fprintf(os.Stderr, "SeshSwap %s (testnet)\n\n%s\nOptions:\n", version, usage)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -189,31 +175,18 @@ Options:
 		ln.Close()
 	}
 
-	// Bundled Session Router.
-	srDir := filepath.Join(bdir, "session-router")
-	if cfg.SessionRouter == nil {
-		cfg.SessionRouter = &wallet.RouterConfig{}
-	}
-	if cfg.SessionRouter.Binary == "" && fileExists(filepath.Join(srDir, "bin", "session-router")) {
-		cfg.SessionRouter.Binary = filepath.Join(srDir, "bin", "session-router")
-		if _, err := relocRouter(srDir); err != nil {
-			log.Printf("Session Router: %v", err)
-		}
-		if ok, _ := srouter.FileHasNetAdmin(cfg.SessionRouter.Binary); !ok && !srouter.CanCreateTUN() {
-			fmt.Println("Private swaps need a one-time permission for Session Router. Run:")
-			fmt.Println("  " + selfCommand() + " setup-router")
-		}
-	}
+	platformRouter(&cfg, bdir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
+	watchStop(ctx, filepath.Join(dir, "stop-request"), stop)
 
 	// Monero: the bundled monero-wallet-rpc, unless the config points at one.
 	var mon *moneroRPC
 	if cfg.XmrWalletRPC == "" {
 		bin := cfg.MoneroWalletRPC
 		if bin == "" {
-			bin = filepath.Join(bdir, "monero", "monero-wallet-rpc")
+			bin = filepath.Join(bdir, "monero", "monero-wallet-rpc"+exeSuffix)
 		}
 		if cfg.XmrNet == "" {
 			cfg.XmrNet = "stagenet"
@@ -309,141 +282,4 @@ func pageUp(u string, wait time.Duration) bool {
 	}
 }
 
-// openBrowser uses xdg-open (or the Debian/Ubuntu fallbacks). Without one
-// that works, the address printed above is enough.
-func openBrowser(u string) {
-	for _, c := range []string{"xdg-open", "sensible-browser", "x-www-browser"} {
-		p, err := exec.LookPath(c)
-		if err != nil {
-			continue
-		}
-		cmd := exec.Command(p, u)
-		if err := cmd.Start(); err != nil {
-			continue
-		}
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-		select {
-		case err := <-done:
-			if err == nil {
-				return
-			}
-		case <-time.After(3 * time.Second):
-			return // still running: a browser is opening
-		}
-	}
-	fmt.Println("Open this address in your browser: " + u)
-}
-
-func stopRunning(dir string) int {
-	b, err := os.ReadFile(filepath.Join(dir, "seshswap.pid"))
-	if err != nil {
-		fmt.Println("SeshSwap isn't running.")
-		return 0
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 1 {
-		fmt.Println("SeshSwap isn't running.")
-		return 0
-	}
-	// Only signal it if it really is seshswap.
-	if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err != nil || !strings.HasPrefix(filepath.Base(exe), "seshswap") {
-		fmt.Println("SeshSwap isn't running.")
-		return 0
-	}
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		fmt.Fprintln(os.Stderr, "seshswap stop:", err)
-		return 1
-	}
-	for i := 0; i < 100; i++ {
-		if syscall.Kill(pid, 0) != nil {
-			fmt.Println("SeshSwap stopped.")
-			return 0
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	fmt.Println("SeshSwap is still stopping.")
-	return 0
-}
-
-// setupRouter gives the bundled Session Router cap_net_admin so it can make
-// its own network adapter while running as you. Needs sudo once (and again
-// if the folder moves).
-func setupRouter() int {
-	srDir := filepath.Join(bundleDir(), "session-router")
-	bin := filepath.Join(srDir, "bin", "session-router")
-	if !fileExists(bin) {
-		fmt.Fprintln(os.Stderr, "No bundled Session Router in", srDir)
-		return 1
-	}
-	if _, err := relocRouter(srDir); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if ok, _ := srouter.FileHasNetAdmin(bin); ok {
-		fmt.Println("Already set up. Private swaps are ready.")
-		return 0
-	}
-	fmt.Println("Session Router needs permission to create its own network adapter.")
-	fmt.Println("This runs once with sudo:")
-	var cmd *exec.Cmd
-	if p, err := exec.LookPath("setcap"); err == nil {
-		fmt.Println("  sudo setcap cap_net_admin+ep " + bin)
-		cmd = exec.Command("sudo", p, "cap_net_admin+ep", bin)
-	} else if p, err := exec.LookPath("python3"); err == nil {
-		// No libcap tools: write the same xattr setcap would (v2, cap_net_admin, +ep).
-		fmt.Println("  (setcap isn't installed; writing the same capability with python3)")
-		cmd = exec.Command("sudo", p, "-c", `import os,struct,sys; os.setxattr(sys.argv[1],"security.capability",struct.pack("<IIIII",0x02000001,1<<12,0,0,0))`, bin)
-	} else {
-		fmt.Println("  sudo apt install libcap2-bin && sudo setcap cap_net_admin+ep " + bin)
-		return 1
-	}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "setup-router:", err)
-		fmt.Fprintln(os.Stderr, "If your account can't use sudo, ask someone who can to run the line above, then run ./seshswap check.")
-		return 1
-	}
-	if ok, _ := srouter.FileHasNetAdmin(bin); !ok {
-		fmt.Fprintln(os.Stderr, "The permission didn't stick. The folder may be on a drive that doesn't support it; move it to your home folder and try again.")
-		return 1
-	}
-	fmt.Println("Done. Session Router still runs as you, not root.")
-	return 0
-}
-
 var errNoDaemon = errors.New("no Monero node answered")
-
-// check runs the bundled programs once to show they work on this computer.
-func check() int {
-	bdir := bundleDir()
-	srDir := filepath.Join(bdir, "session-router")
-	bad := 0
-	if _, err := relocRouter(srDir); err != nil {
-		fmt.Println("session-router: ", err)
-		bad++
-	}
-	for _, c := range []struct{ name, bin, arg string }{
-		{"session-router", filepath.Join(srDir, "bin", "session-router"), "--version"},
-		{"monero-wallet-rpc", filepath.Join(bdir, "monero", "monero-wallet-rpc"), "--version"},
-	} {
-		out, err := exec.Command(c.bin, c.arg).CombinedOutput()
-		line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
-		if err != nil {
-			fmt.Printf("%-18s FAILED: %v %s\n", c.name, err, line)
-			bad++
-			continue
-		}
-		fmt.Printf("%-18s ok  %s\n", c.name, line)
-	}
-	bin := filepath.Join(srDir, "bin", "session-router")
-	if ok, _ := srouter.FileHasNetAdmin(bin); ok {
-		fmt.Printf("%-18s ok  private swaps are set up\n", "permission")
-	} else {
-		fmt.Printf("%-18s not set up yet: run %s setup-router\n", "permission", selfCommand())
-	}
-	if bad > 0 {
-		return 1
-	}
-	return 0
-}

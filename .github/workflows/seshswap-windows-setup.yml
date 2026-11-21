@@ -1,0 +1,51 @@
+# Build SeshSwap-setup.exe (wallet + pinned rusty-setup.exe) and upload it as
+# an Actions artifact. Testnet only. No secrets.
+name: seshswap-windows-setup
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version string for the build
+        required: true
+        default: 0.1.4
+permissions:
+  contents: read
+concurrency:
+  group: seshswap-windows-setup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VER: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: swapd/go.mod
+          cache-dependency-path: swapd/go.sum
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/seshswap-build
+          key: seshswap-windows-setup-${{ hashFiles('scripts/package-windows.sh', 'scripts/package-windows-setup.sh') }}
+          restore-keys: |
+            seshswap-windows-setup-
+      - name: package SeshSwap-setup.exe
+        run: |
+          set -euo pipefail
+          scripts/package-windows-setup.sh "$VER"
+          cd dist/release
+          cp -f SeshSwap-setup.exe "SeshSwap-setup-${VER}.exe"
+          sha256sum "SeshSwap-setup-${VER}.exe" | tee "SeshSwap-setup-${VER}.exe.sha256"
+          ls -l SeshSwap-setup*.exe seshswap-*-windows-x86_64.zip*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SeshSwap-setup-${{ inputs.version }}
+          if-no-files-found: error
+          path: |
+            dist/release/SeshSwap-setup-${{ inputs.version }}.exe
+            dist/release/SeshSwap-setup-${{ inputs.version }}.exe.sha256
+            dist/release/seshswap-${{ inputs.version }}-windows-x86_64.zip
+            dist/release/seshswap-${{ inputs.version }}-windows-x86_64.zip.sha256

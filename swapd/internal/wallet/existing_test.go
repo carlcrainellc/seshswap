@@ -45,7 +45,7 @@ func bundledFake(t *testing.T, s *Server) {
 func dnsAnswers(dns string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err := (&existingRouter{}).probe(ctx, dns, testSesh, "1")
+	_, _, err := (&existingRouter{}).probe(ctx, dns, testSesh, "1")
 	return err == nil || !strings.Contains(err.Error(), "doesn't resolve")
 }
 
