@@ -110,6 +110,13 @@ func run() (quiet bool, err error) { // quiet: don't wait for Enter
 	fmt.Printf("\nInstalling SeshSwap into %s…\n", *dir)
 	n, err := unpackWallet(*dir)
 	if err != nil {
+		// Rusty was stopped for its update; don't leave it that way.
+		if !*noStart {
+			_ = startService(m)
+		}
+		if strings.Contains(err.Error(), "virus or potentially unwanted") {
+			err = fmt.Errorf("%v\nWindows Security blocked that file (it often flags monero-wallet-rpc.exe). Allow it under Windows Security > Protection history, then run setup again", err)
+		}
 		return *q, err
 	}
 	fmt.Printf("Unpacked %d files.\n", n)
