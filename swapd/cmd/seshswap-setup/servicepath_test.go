@@ -1,3 +1,5 @@
+//go:build seshswap_setup
+
 package main
 
 import "testing"
