@@ -3,6 +3,7 @@ package exits
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/carlcrainellc/seshswap/swapd/internal/eth"
@@ -33,8 +34,10 @@ func FuzzParseMeta(f *testing.F) {
 			return
 		}
 		// what we render must parse back to the same known fields
+		// (String turns ";" into "," and newlines into spaces: display text.)
 		m2 := ParseMeta(out)
-		if m2.Price != m.Price && m.Price != "" {
+		want := strings.TrimSpace(strings.NewReplacer(";", ",", "\n", " ").Replace(m.Price))
+		if m2.Price != want && want != "" {
 			t.Fatalf("price %q -> %q via %q", m.Price, m2.Price, out)
 		}
 	})
