@@ -486,7 +486,10 @@ type Log struct {
 
 func (l *Log) Data() []byte { b, _ := hex.DecodeString(strings.TrimPrefix(l.DataHex, "0x")); return b }
 func (l *Log) Block() uint64 {
-	x, _ := HexBig(l.BlockNumber)
+	x, err := HexBig(l.BlockNumber)
+	if err != nil {
+		return 0 // malformed RPC field
+	}
 	return x.Uint64()
 }
 

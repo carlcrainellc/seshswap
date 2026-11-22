@@ -31,3 +31,13 @@ Findings (H-1 and H-2 fixed on branch security/contract-fixes; M-1 and L-1 open)
   with `cancelIntent` and keeps the premium. XmrSwapV3.sol 242-252, 282-292.
 - L-1 `test_ExitPay_zeroRefundToIsUndeployable`: money sent to an ExitPay address
   with refundTo = 0 (or hours/maxCost = 0) is stuck for good. ExitPay.sol 202-214.
+
+## Go fuzz (swapd)
+
+Native `go test -fuzz` targets for the parsers that read untrusted input
+(`fuzz_test.go` in registry, exits, eth, keys, relay, api, wallet). Seeds run
+with plain `go test`. To fuzz one target:
+
+    cd swapd && go test ./internal/relay -run '^$' -fuzz '^FuzzRelayHTTP$' -fuzztime 3m
+
+Crashers found so far have a `regress_test.go` next to them.

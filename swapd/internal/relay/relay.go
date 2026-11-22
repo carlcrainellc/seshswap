@@ -129,7 +129,8 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 // Submit validates and broadcasts a relayed claim.
 func (s *Server) Submit(ctx context.Context, c *eth.RelayedClaim) (eth.Hash, error) {
-	if c.Swap == nil || c.Secret == nil || c.Fee == nil || c.Swap.Value == nil || c.Swap.ClaimKey == nil || c.Swap.RefundKey == nil {
+	if c.Swap == nil || c.Secret == nil || c.Fee == nil || c.Swap.CheckNumbers() != nil ||
+		!eth.FitsU256(c.Secret) || !eth.FitsU256(c.Fee) {
 		return eth.Hash{}, errors.New("missing fields")
 	}
 	if s.Refuse != nil && s.Refuse("claim", c.Swap.ID()) {
@@ -173,11 +174,13 @@ func (s *Server) Submit(ctx context.Context, c *eth.RelayedClaim) (eth.Hash, err
 
 // SubmitIntent validates and broadcasts a claim intent or an ack. Free.
 func (s *Server) SubmitIntent(ctx context.Context, in *Intent) (eth.Hash, error) {
+	// Check the fields before anything hashes the swap (ID panics on a nil
+	// or out-of-range number).
+	if in.Swap == nil || in.Swap.CheckNumbers() != nil {
+		return eth.Hash{}, errors.New("missing fields")
+	}
 	if s.Refuse != nil && s.Refuse(in.Kind, in.Swap.ID()) {
 		return eth.Hash{}, errors.New("relayer policy: not relaying this")
-	}
-	if in.Swap == nil || in.Swap.Value == nil || in.Swap.ClaimKey == nil || in.Swap.RefundKey == nil {
-		return eth.Hash{}, errors.New("missing fields")
 	}
 	var data []byte
 	switch in.Kind {

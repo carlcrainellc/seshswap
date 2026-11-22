@@ -137,7 +137,9 @@ func (ix *Index) get(id uint64) *Entry {
 }
 
 func (ix *Index) apply(l *eth.Log) {
-	if len(l.Topics) == 0 {
+	// Logs come from an RPC node: every registry event indexes the listing
+	// (or swap) id in topic 1, so anything shorter is malformed.
+	if len(l.Topics) < 2 {
 		return
 	}
 	d := l.Data()

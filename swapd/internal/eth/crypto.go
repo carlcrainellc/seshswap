@@ -104,6 +104,10 @@ func Recover(hash []byte, v byte, r, s [32]byte) (Address, error) {
 	return a, nil
 }
 
+// FitsU256 reports whether x is non-nil and fits an ABI uint256. Check
+// untrusted numbers with it before encoding them (u256 panics otherwise).
+func FitsU256(x *big.Int) bool { return x != nil && x.Sign() >= 0 && x.BitLen() <= 256 }
+
 func u256(x *big.Int) []byte {
 	if x.Sign() < 0 || x.BitLen() > 256 {
 		panic("u256 out of range")

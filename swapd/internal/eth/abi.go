@@ -76,6 +76,16 @@ func (s *Swap) words() []byte {
 	return b
 }
 
+// CheckNumbers reports an error if a swap built from untrusted input has a
+// missing, negative or over-256-bit number (words / ID would panic on it).
+func (s *Swap) CheckNumbers() error {
+	if s == nil || !FitsU256(s.ClaimKey) || !FitsU256(s.RefundKey) || !FitsU256(s.Value) ||
+		(s.Premium != nil && !FitsU256(s.Premium)) {
+		return errors.New("swap has a missing or out-of-range number")
+	}
+	return nil
+}
+
 // ID = keccak256(abi.encode(swap)), identical to XmrSwapV3.swapId.
 func (s *Swap) ID() Hash { return Hash(Keccak32(s.words())) }
 
@@ -215,6 +225,9 @@ func SignAck(k *Key, chainID *big.Int, contract Address, id Hash, to Address) Si
 
 // VerifyIntentSig checks a claim-intent signature against the swap's claimer.
 func VerifyIntentSig(chainID *big.Int, contract Address, s *Swap, g Sig) error {
+	if err := s.CheckNumbers(); err != nil {
+		return err
+	}
 	if g.V != 27 && g.V != 28 {
 		return errors.New("bad v")
 	}
@@ -242,6 +255,12 @@ func SignClaim(k *Key, chainID *big.Int, contract Address, s *Swap, secret *big.
 
 // VerifyClaimSig checks the signature off-chain (relayers do this before simulating).
 func VerifyClaimSig(chainID *big.Int, contract Address, c *RelayedClaim) error {
+	if err := c.Swap.CheckNumbers(); err != nil {
+		return err
+	}
+	if !FitsU256(c.Fee) || (c.Secret != nil && !FitsU256(c.Secret)) {
+		return errors.New("claim has a missing or out-of-range number")
+	}
 	if c.V != 27 && c.V != 28 {
 		return errors.New("bad v")
 	}

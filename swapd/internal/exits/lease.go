@@ -245,11 +245,16 @@ func DecodeLeased(l *eth.Log) (*Lease, error) {
 }
 
 func decodeString(b []byte, offset int) (string, error) {
-	if offset < 0 || offset+32 > len(b) {
+	// offset and n come from an RPC log: compare without overflowing.
+	if offset < 0 || offset > len(b)-32 {
 		return "", errors.New("bad string offset")
 	}
-	n := int(new(big.Int).SetBytes(b[offset : offset+32]).Int64())
-	if n < 0 || offset+32+n > len(b) {
+	nb := new(big.Int).SetBytes(b[offset : offset+32])
+	if !nb.IsInt64() {
+		return "", errors.New("bad string length")
+	}
+	n := int(nb.Int64())
+	if n < 0 || n > len(b)-offset-32 {
 		return "", errors.New("bad string length")
 	}
 	return string(b[offset+32 : offset+32+n]), nil

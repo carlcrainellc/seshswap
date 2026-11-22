@@ -149,6 +149,14 @@ func SignAck(k *eth.Key, chainID *big.Int, reg eth.Address, swapID eth.Hash, lis
 
 // Signer recovers who signed a commitment.
 func (sc *SignedCommitment) Signer(chainID *big.Int) (eth.Address, error) {
+	// The commitment comes from the maker: its numbers must fit a uint256
+	// before they are ABI-encoded (eth.WordBig panics otherwise).
+	c := &sc.Commitment
+	for _, x := range []*big.Int{c.ClaimKey, c.Value, c.Penalty} {
+		if !eth.FitsU256(x) {
+			return eth.Address{}, errors.New("commitment has a missing or out-of-range number")
+		}
+	}
 	return eth.Recover(CommitmentDigest(chainID, sc.Registry, &sc.Commitment), sc.Sig.V-27, sc.Sig.R, sc.Sig.S)
 }
 
@@ -403,11 +411,16 @@ var (
 )
 
 func decodeString(b []byte, offset int) (string, error) {
-	if offset < 0 || offset+32 > len(b) {
+	// offset and n come from untrusted data: compare without overflowing.
+	if offset < 0 || offset > len(b)-32 {
 		return "", errors.New("bad string offset")
 	}
-	n := int(new(big.Int).SetBytes(b[offset : offset+32]).Int64())
-	if n < 0 || offset+32+n > len(b) {
+	nb := new(big.Int).SetBytes(b[offset : offset+32])
+	if !nb.IsInt64() {
+		return "", errors.New("bad string length")
+	}
+	n := int(nb.Int64())
+	if n < 0 || n > len(b)-offset-32 {
 		return "", errors.New("bad string length")
 	}
 	return string(b[offset+32 : offset+32+n]), nil
