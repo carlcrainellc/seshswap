@@ -106,8 +106,9 @@ type Server struct {
 	lastUse  time.Time
 	source   string // SourceExisting / SourceBundled: what the private connection last used
 
-	reg regState
-	ex  exitState
+	reg  regState
+	ex   exitState
+	send sendState
 }
 
 type pending struct {
@@ -154,6 +155,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/wallet/unlock", s.wrap(s.unlock))
 	mux.HandleFunc("/v1/wallet/lock", s.wrap(s.lock))
 	mux.HandleFunc("/v1/wallet/backup", s.wrap(s.backup))
+	mux.HandleFunc("/v1/wallet/send/prepare", s.wrap(s.sendPrepare))
+	mux.HandleFunc("/v1/wallet/send/confirm", s.wrap(s.sendConfirm))
+	mux.HandleFunc("/v1/wallet/send/cancel", s.wrap(s.sendCancel))
 	mux.HandleFunc("/v1/balances", s.wrap(s.balances))
 	mux.HandleFunc("/v1/swap-assets", s.wrap(s.swapAssets))
 	mux.HandleFunc("/v1/quote", s.wrap(s.quote))
@@ -566,6 +570,7 @@ func (s *Server) LockWallet() {
 		s.cancel = nil
 	}
 	s.vault, s.eng, s.xmrW, s.pwd = nil, nil, nil, ""
+	s.send.clear()
 	if s.router != nil && s.router.Running() {
 		go s.stopRouter()
 	}

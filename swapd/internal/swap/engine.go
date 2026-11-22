@@ -780,3 +780,51 @@ func (e *Engine) Snapshot(id string) (Record, bool) {
 	}
 	return *r, true
 }
+
+// TakerHeld is what unfinished taker swaps may still take from our own
+// wallet: ETH (wei, value plus any premium) and tokens (per asset) for swaps
+// not locked yet, and how many swaps are unfinished at all (they may still
+// need gas for a refund or a ready transaction).
+func (e *Engine) TakerHeld() (ethWei *big.Int, tokens map[eth.Address]*big.Int, open int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ethWei, tokens = new(big.Int), map[eth.Address]*big.Int{}
+	for _, r := range e.records {
+		if r.Phase.Terminal() {
+			continue
+		}
+		open++
+		if r.Role != Taker || (r.Phase != TNegotiated && r.Phase != TLocking) {
+			continue
+		}
+		if r.Premium != nil {
+			ethWei.Add(ethWei, r.Premium)
+		}
+		if r.Value == nil {
+			continue
+		}
+		if r.Asset.IsZero() {
+			ethWei.Add(ethWei, r.Value)
+		} else {
+			if tokens[r.Asset] == nil {
+				tokens[r.Asset] = new(big.Int)
+			}
+			tokens[r.Asset].Add(tokens[r.Asset], r.Value)
+		}
+	}
+	return
+}
+
+// XmrHeld is Reserved plus swaps whose XMR lock is being sent right now
+// (the transfer may be in flight): what a manual send must leave alone.
+func (e *Engine) XmrHeld() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var sum uint64
+	for _, r := range e.records {
+		if r.Role == Maker && r.XmrLock == nil && (r.Phase == MNegotiated || r.Phase == MEthLocked || r.Phase == MXmrLocking) {
+			sum += r.XMR
+		}
+	}
+	return sum
+}

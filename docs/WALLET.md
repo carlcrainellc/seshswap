@@ -17,6 +17,7 @@ No mainnet, no real funds.
   crash-safe writes).
 - A local page on `127.0.0.1` (not on all interfaces): balances, Swap, trade
   progress in plain English with a refund time in Central (CT), history, settings.
+- Send XMR, ETH or USDC to an address you paste (see Send below).
 - Request a quote from a configured maker, run an ETH→XMR swap with the
   existing taker engine, resume unfinished swaps on unlock after a crash or close.
 
@@ -344,6 +345,36 @@ The wallet identifies itself with an `X-SeshSwap-Client` header. The wallet
 is open source, so that header only keeps casual scripts out; the faucet's
 real limits (one claim per address a day, three per IP, daily caps and the
 proof-of-work) are enforced on the server.
+
+## Send
+
+The **Send** screen moves coins out of the wallet while it's unlocked. Pick
+XMR, ETH or USDC, paste an address, enter an amount or tick **Send all**, then
+**Review**. Nothing leaves until you press **Send** on the review screen.
+
+- Addresses are checked before review: a Monero address must decode, its
+  checksum must match and its network must be this wallet's (a mainnet address
+  is refused on stagenet). An Ethereum address must be `0x` + 40 hex; if it
+  mixes upper and lower case the EIP-55 checksum must match. The zero address,
+  this wallet's own address and the USDC contract itself are refused.
+- Coins an unfinished swap still needs stay put: XMR promised to a swap that
+  hasn't locked it yet, ETH or USDC for a swap you started that hasn't locked
+  yet, and 0.0002 ETH of gas per unfinished swap for its claim or refund.
+  **Send all** of XMR is off while a swap is holding XMR.
+- Review shows the amount, the network fee and the total. XMR: the wallet
+  signs the transaction(s) at review (`transfer`/`sweep_all` with
+  `do_not_relay`) and broadcasts them on Send, so the fee shown is exact.
+  ETH/USDC: the fee shown is the most it can cost (gas estimate +25% at the
+  current fee cap); the transaction is signed with those exact limits on Send.
+  USDC sends pay their fee in ETH.
+- A review is good for 3 minutes and works once; locking the wallet drops it.
+  On Send the wallet checks the balance and open swaps again, then shows the
+  transaction id and a block explorer link.
+
+API: `POST /v1/wallet/send/prepare` `{coin, to, amount | all}` returns
+`{id, amount, fee, feeCoin, total, expiresIn}`; `POST /v1/wallet/send/confirm`
+`{id}` returns `{txid, url}` (a second confirm of the same id gets 409);
+`POST /v1/wallet/send/cancel` `{id}` drops a review. All need the page token.
 
 ## Satchel hookup (local test)
 

@@ -155,6 +155,7 @@ function shell(main, {nav}={}) {
     <div class="brand"><i></i> SeshSwap</div>
     ${navItem("home","Balances")}
     ${navItem("swap","Swap")}
+    ${navItem("send","Send")}
     ${navItem("search","Directory")}
     ${st.exitsEnabled ? navItem("exits","Exits") : ""}
     ${navItem("history","History")}
@@ -262,9 +263,147 @@ function home() {
       ${cell("XMR", b.xmr, b.xmrAddress, b.xmrError, xmrLock)}
     </div>
     <div class="actions"><button class="btn big" data-go="swap" data-testid="go-swap">Swap</button>
+      <button class="btn ghost big" data-go="send" data-testid="go-send">Send</button>
       ${st.faucet ? `<button class="btn ghost" data-act="faucet-claim" data-testid="faucet-claim" ${state.faucetBusy||faucetEmpty()?"disabled":""}>${state.faucetBusy ? "Getting test coins…" : "Get test coins"}</button>` : ""}</div>
     ${st.faucet ? faucetBox() : ""}
   `, {nav:"home"});
+}
+
+// ---- Send ----
+const SEND_COINS = ["XMR","ETH","USDC"];
+function sendCoins() {
+  const b = state.balances || {};
+  return SEND_COINS.filter(c => c !== "USDC" || b.usdcAddress || b.demo);
+}
+function sendBalance(c) {
+  const b = state.balances || {};
+  if (c === "XMR") return b.xmrUnlocked ?? b.xmr;
+  if (c === "ETH") return b.eth;
+  return b.usdc;
+}
+// A quick shape check while typing; the wallet checks the checksum and network on Review.
+function sendAddrHint(coin, to) {
+  to = (to||"").trim();
+  if (!to) return "";
+  if (coin === "XMR") {
+    if (to.startsWith("0x")) return "That looks like an Ethereum address.";
+    if (to.length !== 95 && to.length !== 106) return "A Monero address is 95 characters (106 with a payment ID).";
+    return "";
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)) return "An Ethereum address is 0x followed by 40 letters and digits.";
+  return "";
+}
+function sendScreen() {
+  const d = state.send || (state.send = {coin: "XMR", to: "", amount: "", all: false});
+  if (d.result) return shell(sendDone(d), {nav:"send"});
+  if (d.review) return shell(sendReview(d), {nav:"send"});
+  const coins = sendCoins();
+  const bal = sendBalance(d.coin);
+  const hint = sendAddrHint(d.coin, d.to);
+  const xmrNote = d.coin === "XMR" && (state.balances||{}).xmrLocked
+    ? `<div class="a">${esc(state.balances.xmrLocked)} XMR is still locked and can't be sent yet.</div>` : "";
+  return shell(`
+    <h1 class="h1">Send</h1>
+    <p class="lead">Move coins out of this wallet. You'll see the network fee before anything is sent.</p>
+    <div class="card stack" data-testid="send-form">
+      <div><label>Coin</label><div class="chips">${coins.map(c => `<button class="chip ${d.coin===c?"on":""}" data-send-coin="${c}" data-testid="send-coin-${c.toLowerCase()}">${c}</button>`).join("")}</div></div>
+      <div><label>To</label>
+        <input type="text" id="send-to" data-testid="send-to" value="${esc(d.to)}" autocomplete="off" spellcheck="false" class="mono"
+          placeholder="${d.coin==="XMR" ? ((state.status||{}).network||"").toLowerCase().includes("stagenet") ? "Stagenet Monero address (starts with 5 or 7)" : "Monero address" : "0x…"}">
+        <div class="a" id="send-hint" data-testid="send-hint" style="color:var(--warn)">${esc(hint)}</div>
+        ${d.coin==="USDC" ? `<div class="a">Sent on Arbitrum. The network fee is paid in ETH.</div>` : ""}</div>
+      <div><label>Amount</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" inputmode="decimal" id="send-amt" data-testid="send-amount" value="${esc(d.all ? "" : d.amount)}" placeholder="${d.all ? "Everything you can send" : "0.0"}" ${d.all?"disabled":""}>
+          <span class="mono" style="min-width:44px">${d.coin}</span>
+        </div>
+        <div class="check" style="margin-top:8px"><input type="checkbox" id="send-all" data-testid="send-all" ${d.all?"checked":""}> <label for="send-all" style="margin:0">Send all</label></div>
+        <div class="a" data-testid="send-avail">Available: ${esc(bal ?? (state.balances ? "—" : "…"))} ${d.coin}. Coins an open swap still needs are kept back.</div>
+        ${xmrNote}</div>
+      ${err()}
+      <div class="actions"><button class="btn" data-act="send-review" data-testid="send-review" ${d.busy?"disabled":""}>${d.busy ? "Working out the fee…" : "Review"}</button></div>
+    </div>`, {nav:"send"});
+}
+function sendReview(d) {
+  const r = d.review;
+  const left = Math.max(0, Math.round((r.expiresAt - Date.now())/1000));
+  return `
+    <h1 class="h1">Check and send</h1>
+    <p class="lead">Nothing has been sent yet. Sends can't be undone, so check the address.</p>
+    <div class="card stack" data-testid="send-review-card">
+      <table class="q">
+        <tr><th>Send</th><td data-testid="rv-amount"><b>${esc(r.amount)} ${esc(r.coin)}</b>${r.all ? " (everything you can send)" : ""}</td></tr>
+        <tr><th>To</th><td class="mono" style="word-break:break-all" data-testid="rv-to">${esc(r.to)}</td></tr>
+        <tr><th>Network fee</th><td data-testid="rv-fee">${r.coin==="XMR" ? "" : "up to "}${esc(r.fee)} ${esc(r.feeCoin)}${r.feeNote ? `<div class="a">${esc(r.feeNote)}</div>` : ""}</td></tr>
+        <tr><th>Total</th><td data-testid="rv-total"><b>${esc(r.total)}${r.coin===r.feeCoin ? " "+esc(r.coin) : ""}</b></td></tr>
+      </table>
+      <div class="a" id="send-left" data-testid="send-left">${left > 0 ? `This review is good for ${left} s.` : "This review expired. Go back and review again."}</div>
+      ${err()}
+      <div class="actions">
+        <button class="btn ghost" data-act="send-back" ${d.busy?"disabled":""}>Back</button>
+        <button class="btn" data-act="send-confirm" data-testid="send-confirm" ${d.busy||left<=0?"disabled":""}>${d.busy ? "Sending…" : "Send " + esc(r.amount) + " " + esc(r.coin)}</button>
+      </div>
+    </div>`;
+}
+function sendDone(d) {
+  const x = d.result;
+  return `
+    <h1 class="h1">Sent</h1>
+    <div class="card stack" data-testid="send-done">
+      <div class="status-lg ok">${esc(x.amount)} ${esc(x.coin)} is on its way.</div>
+      <div class="a mono" style="word-break:break-all">To ${esc(x.to)}</div>
+      <div><label>Transaction</label><div class="mono" style="word-break:break-all" data-testid="send-txid">${esc(x.txid)} <button class="copy" data-copy="${esc(x.txid)}">Copy</button></div>
+        ${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" data-testid="send-explorer">View on the block explorer</a>` : ""}</div>
+      <div class="a">${x.coin==="XMR" ? "Monero takes about 2 minutes to confirm and 20 minutes before the receiver can spend it." : "Arbitrum usually confirms in a few seconds."}</div>
+      <div class="actions"><button class="btn ghost" data-act="send-new">Send more</button><button class="btn" data-go="home">Balances</button></div>
+    </div>`;
+}
+function sendCapture() {
+  const d = state.send; if (!d) return;
+  const to = $("#send-to"), amt = $("#send-amt"), all = $("#send-all");
+  if (to) d.to = to.value.trim();
+  if (amt && !d.all) d.amount = amt.value.trim();
+  if (all) d.all = all.checked;
+}
+let sendTick;
+function sendTimer(on) {
+  if (sendTick) clearInterval(sendTick); sendTick = null;
+  if (!on) return;
+  sendTick = setInterval(() => {
+    const d = state.send;
+    if (state.screen !== "send" || !d || !d.review) { sendTimer(false); return; }
+    const left = Math.max(0, Math.round((d.review.expiresAt - Date.now())/1000));
+    const el = $("#send-left"); if (el) el.textContent = left > 0 ? `This review is good for ${left} s.` : "This review expired. Go back and review again.";
+    if (left <= 0) { const b = $("[data-testid=send-confirm]"); if (b) b.disabled = true; sendTimer(false); }
+  }, 1000);
+}
+async function sendAct(name) {
+  const d = state.send;
+  if (name === "send-review") {
+    sendCapture();
+    if (!d.to) throw new Error("Enter the address to send to.");
+    if (!d.all && !d.amount) throw new Error("Enter an amount, or tick Send all.");
+    d.busy = true; render();
+    try {
+      const r = await api("/v1/wallet/send/prepare", {method:"POST", body: JSON.stringify({coin: d.coin, to: d.to, amount: d.amount, all: d.all})});
+      r.expiresAt = Date.now() + (r.expiresIn||0)*1000;
+      d.review = r; sendTimer(true);
+    } finally { d.busy = false; }
+  }
+  if (name === "send-back") {
+    if (d.review) api("/v1/wallet/send/cancel", {method:"POST", body: JSON.stringify({id: d.review.id})}).catch(()=>{});
+    d.review = null; sendTimer(false);
+  }
+  if (name === "send-confirm") {
+    d.busy = true; render();
+    try {
+      d.result = await api("/v1/wallet/send/confirm", {method:"POST", body: JSON.stringify({id: d.review.id})});
+      d.review = null; sendTimer(false);
+      refreshBalances();
+    } catch(e) { d.review = null; sendTimer(false); throw e; }
+    finally { d.busy = false; }
+  }
+  if (name === "send-new") { state.send = {coin: d.coin, to: "", amount: "", all: false}; }
 }
 
 function faucetBox() {
@@ -694,11 +833,12 @@ async function exitConnect(id) {
 const screens = {
   welcome, unlock, "create-show": createShow, confirm: confirmWords,
   password: () => setPassword("create"), restore: () => setPassword("restore"),
-  home, swap: swapForm, "confirm-swap": confirmSwap, "confirm-satchel": confirmSatchel, progress, history, settings, search, exits: exitsScreen
+  home, send: sendScreen, swap: swapForm, "confirm-swap": confirmSwap, "confirm-satchel": confirmSatchel, progress, history, settings, search, exits: exitsScreen
 };
 
 function render() {
   const el = $("#app");
+  if (state.screen === "send") sendCapture(); // keep what's typed across refreshes
   const fn = screens[state.screen] || welcome;
   el.innerHTML = fn();
   const tl = $("#techlog");
@@ -712,6 +852,12 @@ function render() {
     try { await runSearch(); } catch(e) { state.err = e.message; } render(); }));
   const sqi = $("#sq");
   if (sqi) sqi.addEventListener("keydown", ev => { if (ev.key === "Enter") act("do-search"); });
+  el.querySelectorAll("[data-send-coin]").forEach(b => b.addEventListener("click", () => {
+    sendCapture(); state.send.coin = b.dataset.sendCoin; state.err = ""; render(); }));
+  const sto = $("#send-to");
+  if (sto) sto.addEventListener("input", () => { const h = $("#send-hint"); if (h) h.textContent = sendAddrHint(state.send.coin, sto.value); });
+  const sall = $("#send-all");
+  if (sall) sall.addEventListener("change", () => { sendCapture(); render(); });
   el.querySelectorAll("[data-copy]").forEach(b => b.addEventListener("click", () => copy(b.dataset.copy)));
   el.querySelectorAll("[data-exit-buy]").forEach(b => b.addEventListener("click", () => exitBuy(Number(b.dataset.exitBuy))));
   el.querySelectorAll("[data-exit-connect]").forEach(b => b.addEventListener("click", () => exitConnect(Number(b.dataset.exitConnect))));
@@ -743,6 +889,10 @@ async function go(name, id) {
       state.screen = "exits";
       await loadExits();
       startExitPoll();
+    } else if (name === "send") {
+      if (state.send && (state.send.result)) state.send = {coin: state.send.coin, to: "", amount: "", all: false};
+      state.screen = "send"; render();
+      await refreshBalances();
     } else if (name === "settings") {
       state.settings = await api("/v1/settings");
       state.screen = "settings";
@@ -767,7 +917,7 @@ async function act(name) {
     }
     if (name === "lock") {
       await api("/v1/wallet/lock", {method:"POST", body:"{}"});
-      stopPoll();
+      stopPoll(); state.send = null; sendTimer(false);
       await boot();
       return;
     }
@@ -871,6 +1021,7 @@ async function act(name) {
       } catch(e) { state.faucet = {ok:false, message: e.message}; }
       finally { state.faucetBusy = false; }
     }
+    if (name.startsWith("send-")) await sendAct(name);
     if (name === "show-backup") {
       const j = await api("/v1/wallet/backup", {method:"POST", body: JSON.stringify({password: $("#pw-bak").value})});
       state.backupWords = j.words;
