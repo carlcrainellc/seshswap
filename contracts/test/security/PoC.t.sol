@@ -6,8 +6,9 @@ import {SeshRegistry} from "../../src/registry/SeshRegistry.sol";
 import {ExitLease} from "../../src/exits/ExitLease.sol";
 import {MockUSDC} from "../../src/MockUSDC.sol";
 
-/// Proofs of concept for the findings in SECURITY-FUZZ.md. Each test PASSES
-/// when the problem is present (it shows the attacker's gain).
+/// Proofs of concept for the findings in test/security/README.md. On this
+/// branch H-1 and H-2 are fixed and their tests check the attack now fails;
+/// M-1 (a design trade-off) still shows the attacker's gain.
 contract SecurityPoC is SecBase {
     XmrSwapV3 v3;
     SeshRegistry reg;
@@ -54,75 +55,78 @@ contract SecurityPoC is SecBase {
         return vm.sign(makerPk, reg.commitmentDigest(c));
     }
 
-    /// FINDING H-1: one signed Commitment can be recorded against many V3 swaps.
-    /// The commitment binds claimer + claimKey + value but not the V3 swap id
-    /// (salt, t1, t2, grace, refundKey, premium), so the taker locks the same
-    /// terms N times with different salts and commits each one. The maker only
-    /// knows about (and acks) one swap; the rest get slashed.
+    /// H-1 (fixed): one signed Commitment used to be recordable against many
+    /// V3 swaps with the same terms and different salts. Now each signed
+    /// commitment is accepted once.
     function test_PoC_H1_CommitmentReplayAcrossSalts() public {
         uint256 value = 0.001 ether;
         SeshRegistry.Commitment memory c = _commitment(value);
         (uint8 v, bytes32 r, bytes32 ss) = _sign(c); // maker signs ONCE
-
-        uint256 n = 5;
-        bytes32[] memory ids = new bytes32[](n);
-        XmrSwapV3.Swap[] memory sw = new XmrSwapV3.Swap[](n);
-        for (uint256 i = 0; i < n; i++) {
-            (sw[i], ids[i]) = _lock(value, bytes32(i + 1));
-            reg.commit(sw[i], c, v, r, ss); // same signature every time
-        }
-        assertEq(reg.listing(lid).openCommits, n);
-        assertEq(reg.listing(lid).reserved, n * MIN_PEN);
-
-        // Honest maker acks the one swap it negotiated.
-        (v, r, ss) = vm.sign(makerPk, reg.ackDigest(ids[0], lid));
-        reg.ack(ids[0], v, r, ss);
-
-        // Taker takes its ETH back from the extra swaps (cancel + refund before t1).
-        for (uint256 i = 1; i < n; i++) {
-            vm.startPrank(taker);
-            v3.cancelIntent(sw[i]);
-            v3.refund(sw[i], ALICE_S);
-            vm.stopPrank();
-        }
-        vm.warp(block.timestamp + ATTEST);
-        uint256 before = taker.balance;
-        for (uint256 i = 1; i < n; i++) reg.slash(ids[i]);
-        assertEq(taker.balance - before, (n - 1) * MIN_PEN, "taker collected n-1 penalties");
-        assertEq(reg.listing(lid).bond, MAKER_BOND - (n - 1) * MIN_PEN);
+        (XmrSwapV3.Swap memory s1,) = _lock(value, bytes32(uint256(1)));
+        reg.commit(s1, c, v, r, ss);
+        (XmrSwapV3.Swap memory s2,) = _lock(value, bytes32(uint256(2)));
+        vm.expectRevert(SeshRegistry.WrongStatus.selector);
+        reg.commit(s2, c, v, r, ss);
+        assertEq(reg.listing(lid).openCommits, 1);
+        assertEq(reg.listing(lid).reserved, MIN_PEN);
     }
 
-    /// FINDING H-2: taker cancels before the maker can lock XMR, then slashes.
-    /// The maker daemon only locks XMR while the V3 swap is PENDING and only acks
-    /// after its XMR lock (swapd/internal/swap/maker.go MEthLocked, and
-    /// api/registry.go ack loop). slash() allows CANCELLING / REFUNDED, so a
-    /// taker that locks, commits and cancels in the same block keeps all its ETH
-    /// and takes the penalty. Repeatable until the maker's free bond is gone.
+    /// H-2 (fixed): the taker used to lock, commit and cancel at once (so the
+    /// maker never locks XMR and never acks) and then slash. A cancel made
+    /// before attestBy now blocks the slash, and so does a refund.
     function test_PoC_H2_CancelThenSlash() public {
         uint256 value = 0.001 ether;
-        uint256 start = taker.balance;
-        vm.prank(maker);
-        reg.topUp{value: 0.008 ether}(lid); // a maker usually bonds more than the minimum
-        uint256 bond0 = reg.listing(lid).bond;
-        uint256 rounds;
-        // Commits stop only once the bond drops below makerMinBond.
-        while (reg.listing(lid).bond >= MAKER_BOND) {
-            uint256 i = rounds++;
-            SeshRegistry.Commitment memory c = _commitment(value);
-            c.claimKey = BOB_K; // fresh claimer per swap in real life; same here is fine
-            (uint8 v, bytes32 r, bytes32 ss) = _sign(c);
-            (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(1000 + i));
-            reg.commit(s, c, v, r, ss);
-            vm.startPrank(taker);
-            v3.cancelIntent(s); // same block: the maker never sees PENDING after its confirmations
-            v3.refund(s, ALICE_S);
-            vm.stopPrank();
-            vm.warp(block.timestamp + ATTEST);
+        SeshRegistry.Commitment memory c = _commitment(value);
+        (uint8 v, bytes32 r, bytes32 ss) = _sign(c);
+        (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(uint256(1000)));
+        reg.commit(s, c, v, r, ss);
+        vm.prank(taker);
+        v3.cancelIntent(s); // same block as the lock
+        vm.warp(block.timestamp + ATTEST);
+        vm.expectRevert(SeshRegistry.WrongStatus.selector);
+        reg.slash(id); // CANCELLING, cancelled before attestBy
+        vm.prank(taker);
+        v3.refund(s, ALICE_S);
+        vm.expectRevert(SeshRegistry.WrongStatus.selector);
+        reg.slash(id); // REFUNDED
+        assertEq(reg.listing(lid).bond, MAKER_BOND);
+    }
+
+    /// A real no-show is still slashable: no ack by attestBy, the taker then
+    /// cancels (after attestBy) and slashes before it refunds.
+    function test_H2_NoShowStillSlashableAfterLateCancel() public {
+        uint256 value = 0.001 ether;
+        SeshRegistry.Commitment memory c = _commitment(value);
+        (uint8 v, bytes32 r, bytes32 ss) = _sign(c);
+        (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(uint256(1001)));
+        reg.commit(s, c, v, r, ss);
+        vm.warp(block.timestamp + ATTEST);
+        vm.prank(taker);
+        v3.cancelIntent(s);
+        uint256 before = taker.balance;
+        reg.slash(id);
+        assertEq(taker.balance - before, MIN_PEN);
+    }
+
+    /// Exact boundary: a cancel at attestBy - 1 blocks the slash, one at attestBy does not.
+    function testFuzz_H2_CancelTimingBoundary(uint8 off) public {
+        uint256 value = 0.001 ether;
+        SeshRegistry.Commitment memory c = _commitment(value);
+        (uint8 v, bytes32 r, bytes32 ss) = _sign(c);
+        (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(uint256(2000)));
+        reg.commit(s, c, v, r, ss);
+        (, uint64 attestBy,,,,) = reg.commits(id);
+        uint256 tc = uint256(attestBy) - 3 + (off % 6);
+        vm.warp(tc);
+        vm.prank(taker);
+        v3.cancelIntent(s);
+        vm.warp(attestBy > tc ? attestBy : tc);
+        if (tc < attestBy) {
+            vm.expectRevert(SeshRegistry.WrongStatus.selector);
+            reg.slash(id);
+        } else {
             reg.slash(id);
         }
-        assertEq(taker.balance - start, bond0 - reg.listing(lid).bond, "every slashed wei went to the taker");
-        assertGt(taker.balance - start, 0.008 ether, "taker took everything above the minimum bond");
-        emit log_named_uint("rounds", rounds);
     }
 
     /// FINDING M-1: the premium can be dodged by front-running ackLocked.

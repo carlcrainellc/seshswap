@@ -149,7 +149,7 @@ contract SeshRegistryTest is Test {
     }
 
     function stage(bytes32 id) internal view returns (SeshRegistry.CommitStage st) {
-        (st,,,,) = reg.commits(id);
+        (st,,,,,) = reg.commits(id);
     }
 
     // ------------------------------------------------------------ bonds and listings

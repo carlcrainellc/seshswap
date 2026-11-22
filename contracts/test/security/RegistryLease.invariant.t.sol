@@ -289,7 +289,7 @@ contract RegLeaseHandler is Test {
     function slashCommit(uint256 i) external {
         if (commits.length == 0) return;
         C memory c = commits[i % commits.length];
-        (,uint64 attestBy,,,) = reg.commits(c.id);
+        (,uint64 attestBy,,,,) = reg.commits(c.id);
         try reg.slash(c.id) {
             nSlashes++;
             if (block.timestamp < attestBy) withdrewEarly = true;
@@ -430,7 +430,7 @@ contract RegistryLeaseInvariants is SecBase {
             for (uint256 j = 0; j < h.commitCount(); j++) {
                 (bytes32 id, uint256 cl) = h.commitAt(j);
                 if (cl != lid) continue;
-                (SeshRegistry.CommitStage st,,, , uint256 pen) = reg.commits(id);
+                (SeshRegistry.CommitStage st,,, , uint256 pen,) = reg.commits(id);
                 if (st == SeshRegistry.CommitStage.OPEN) { res += pen; open++; }
             }
             assertEq(l.reserved, res);

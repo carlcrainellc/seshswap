@@ -57,9 +57,11 @@ the cap and penalty checks.
   signature by the listing owner saying "my XMR is locked". Anyone may submit
   it. The maker's own daemon is its watchtower and acks automatically once its
   XMR lock is sent. Anyone can run another watchtower with the same signed ack.
-- If the attest deadline passes with no ack, and the V3 swap is not READY or
-  CLAIMED, anyone can call `slash(swapId)`. The penalty goes to the taker. The
-  wallet does this itself.
+- If the attest deadline passes with no ack, and the V3 swap is not READY,
+  CLAIMED or REFUNDED, and the taker did not cancel before the deadline,
+  anyone can call `slash(swapId)`. The penalty goes to the taker. The wallet
+  does this itself, before it refunds.
+- Each signed commitment can be recorded once, for one swap.
 - After an ack, or once the V3 swap is READY or CLAIMED, `release` frees the
   reservation.
 

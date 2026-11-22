@@ -509,6 +509,12 @@ func (s *Server) regStep(ctx context.Context, eng *swap.Engine, rec *swap.Record
 		if err != nil || st.Stage == eth.StatusReady || st.Stage == eth.StatusClaimed {
 			return // we saw the XMR or the swap finished: nothing to slash
 		}
+		if st.Stage == eth.StatusRefunded {
+			// The registry refuses a slash once the swap is refunded (its refund
+			// time is not on-chain), so stop trying.
+			upd(func(l *swap.RegLink) { l.Skipped, l.LastError = true, "refunded before the penalty was claimed" })
+			return
+		}
 		reg := l.Registry
 		r, err := eng.K.C.SendAndWait(ctx, eng.EthKey, &reg, nil, registry.EncodeSlash(rec.SwapID))
 		if err != nil {

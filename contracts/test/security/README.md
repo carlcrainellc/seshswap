@@ -20,7 +20,7 @@ Files
 - `Halmos.t.sol`: symbolic checks of owner checks and time boundaries.
 - `PoC.t.sol`: proofs of the findings below. These pass while the bug exists.
 
-Findings (contracts unchanged here)
+Findings (H-1 and H-2 fixed on branch security/contract-fixes; M-1 and L-1 open)
 - H-1 `test_PoC_H1_CommitmentReplayAcrossSalts`: one signed maker Commitment can
   be recorded against many V3 swaps (it does not bind the swap id). The taker
   slashes every extra one. SeshRegistry.sol `commit` (452-485), Commitment struct (65-79).

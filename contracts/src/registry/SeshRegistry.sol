@@ -63,8 +63,10 @@ contract SeshRegistry {
     }
 
     /// What a maker signs when it agrees a swap (EIP-712). It binds the V3
-    /// swap's claimer and claim key, which are fresh per swap, so it cannot
-    /// be reused for another swap.
+    /// swap's claimer and claim key, but not the swap id (the maker signs
+    /// before the lock), so the same terms could be locked again with another
+    /// salt. Each signed commitment is therefore accepted only once
+    /// (`usedCommitment`).
     struct Commitment {
         uint256 listingId;
         address taker; // V3 owner
@@ -84,6 +86,7 @@ contract SeshRegistry {
         uint256 listingId;
         address taker;
         uint256 penalty;
+        uint64 grace; // the V3 swap's intent freeze, to date a cancel intent
     }
 
     struct Info {
@@ -151,6 +154,8 @@ contract SeshRegistry {
     mapping(bytes32 => uint256) public idOfSesh;
     /// V3 swap id => commitment record
     mapping(bytes32 => Commit) public commits;
+    /// commitment digest => already recorded (one swap per signed commitment)
+    mapping(bytes32 => bool) public usedCommitment;
     /// ETH that could not be pushed (recipient rejected it)
     mapping(address => uint256) public owed;
 
@@ -472,7 +477,10 @@ contract SeshRegistry {
         Listing storage l = _listings[c.listingId];
         if (l.tag != MAKER) revert NotMaker();
         if (l.status != Status.ACTIVE || l.bond < makerMinBond) revert WrongStatus();
-        _checkSig(commitmentDigest(c), l.owner, v, r, sigS);
+        bytes32 cd = commitmentDigest(c);
+        if (usedCommitment[cd]) revert WrongStatus();
+        _checkSig(cd, l.owner, v, r, sigS);
+        usedCommitment[cd] = true;
 
         if (ethValue(c.asset, c.value) > l.bond * capFactor) revert OverCap();
         if (c.penalty < requiredPenalty(c.asset, c.value)) revert BadParams();
@@ -480,7 +488,7 @@ contract SeshRegistry {
 
         l.reserved += c.penalty;
         l.openCommits += 1;
-        commits[id] = Commit(CommitStage.OPEN, attestBy, c.listingId, s.owner, c.penalty);
+        commits[id] = Commit(CommitStage.OPEN, attestBy, c.listingId, s.owner, c.penalty, s.grace);
         emit Committed(id, c.listingId, s.owner, c.value, c.penalty, attestBy);
     }
 
@@ -511,13 +519,21 @@ contract SeshRegistry {
 
     /// No ack by `attestBy`: anyone may pay the penalty to the taker. Not
     /// possible once the taker confirmed the XMR (READY) or the swap was
-    /// claimed, since then the maker evidently followed through.
+    /// claimed, since then the maker evidently followed through. Also not
+    /// possible if the taker cancelled before `attestBy` (the maker never
+    /// locks XMR into a cancelled swap, so it has nothing to ack), or once the
+    /// swap is refunded (the refund time is not on-chain, so the taker must
+    /// slash before it refunds).
     function slash(bytes32 swapId) external nonReentrant {
         Commit storage c = commits[swapId];
         if (c.stage != CommitStage.OPEN) revert WrongStatus();
         if (block.timestamp < c.attestBy) revert WrongTime();
-        (XmrSwapV3.Stage st,,) = swap.status(swapId);
-        if (st == XmrSwapV3.Stage.READY || st == XmrSwapV3.Stage.CLAIMED) revert WrongStatus();
+        (XmrSwapV3.Stage st, uint64 dl,) = swap.status(swapId);
+        if (st == XmrSwapV3.Stage.READY || st == XmrSwapV3.Stage.CLAIMED || st == XmrSwapV3.Stage.REFUNDED) {
+            revert WrongStatus();
+        }
+        // CANCELLING: deadline = cancel time + grace
+        if (st == XmrSwapV3.Stage.CANCELLING && dl - c.grace < c.attestBy) revert WrongStatus();
         c.stage = CommitStage.SLASHED;
         Listing storage l = _listings[c.listingId];
         l.reserved -= c.penalty;
