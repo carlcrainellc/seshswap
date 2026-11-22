@@ -127,3 +127,36 @@ func TestFaucetClaimNeedsUnlock(t *testing.T) {
 		t.Fatalf("got %d", w.Code)
 	}
 }
+
+func TestFaucetMessageNamesOnlySentCoins(t *testing.T) {
+	srv := fakeFaucet(t, 4, func(e, x string) (int, any) {
+		return 200, map[string]any{"ok": true, "payouts": map[string]any{
+			"eth":  map[string]string{"note": "The faucet is out of ETH right now."},
+			"usdc": map[string]string{"amount": "5", "tx": "0xbb"},
+			"xmr":  map[string]string{"amount": "0.02", "tx": "cc"},
+		}}
+	})
+	defer srv.Close()
+	res, err := (&Server{}).ClaimFaucet(context.Background(), srv.URL, tEth, tXmr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK || strings.Contains(res.Message, "ETH") || !strings.Contains(res.Message, "USDC") || !strings.Contains(res.Message, "XMR") {
+		t.Fatalf("message %q", res.Message)
+	}
+	cases := []struct {
+		ps   []FaucetPayout
+		want string
+	}{
+		{[]FaucetPayout{{Coin: "ETH", Tx: "0x1"}, {Coin: "USDC", Tx: "0x2"}}, "Sent ETH and USDC. They show up in a minute or two."},
+		{[]FaucetPayout{{Coin: "ETH", Tx: "0x1"}, {Coin: "USDC", Tx: "0x2"}, {Coin: "XMR", Tx: "x"}}, "Sent ETH, USDC and XMR. ETH and USDC show up in a minute or two; XMR needs about 20 minutes to unlock."},
+		{[]FaucetPayout{{Coin: "USDC", Tx: "0x2"}}, "Sent USDC. It shows up in a minute or two."},
+		{[]FaucetPayout{{Coin: "ETH"}, {Coin: "XMR", Tx: "x"}}, "Sent XMR. It needs about 20 minutes to unlock."},
+		{[]FaucetPayout{{Coin: "ETH"}, {Coin: "USDC"}}, "The faucet didn't send anything this time."},
+	}
+	for i, c := range cases {
+		if got := faucetSentMessage(c.ps); got != c.want {
+			t.Errorf("case %d: got %q want %q", i, got, c.want)
+		}
+	}
+}

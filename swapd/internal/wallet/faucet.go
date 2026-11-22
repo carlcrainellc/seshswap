@@ -197,12 +197,7 @@ func (s *Server) ClaimFaucet(ctx context.Context, base, ethAddr, xmrAddr, explor
 	}
 	switch {
 	case res.OK:
-		res.Message = "Sent. The coins show up in a minute or two."
-		for _, p := range res.Payouts {
-			if p.Coin == "XMR" && p.Tx != "" {
-				res.Message = "Sent. ETH and USDC show up in a minute or two; XMR needs about 20 minutes to unlock."
-			}
-		}
+		res.Message = faucetSentMessage(res.Payouts)
 	case cr.Error != "":
 		res.Message = cr.Error
 	default:
@@ -274,4 +269,34 @@ func (s *Server) faucetStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, out)
+}
+
+// faucetSentMessage names only the coins that actually went out.
+func faucetSentMessage(ps []FaucetPayout) string {
+	var fast []string
+	xmr := false
+	for _, p := range ps {
+		if p.Tx == "" {
+			continue
+		}
+		if p.Coin == "XMR" {
+			xmr = true
+		} else {
+			fast = append(fast, p.Coin)
+		}
+	}
+	if len(fast) == 0 && !xmr {
+		return "The faucet didn't send anything this time."
+	}
+	if len(fast) == 0 {
+		return "Sent XMR. It needs about 20 minutes to unlock."
+	}
+	coins, it, verb := strings.Join(fast, " and "), "It", "shows"
+	if len(fast) > 1 {
+		it, verb = "They", "show"
+	}
+	if !xmr {
+		return "Sent " + coins + ". " + it + " " + verb + " up in a minute or two."
+	}
+	return "Sent " + strings.Join(fast, ", ") + " and XMR. " + coins + " " + verb + " up in a minute or two; XMR needs about 20 minutes to unlock."
 }
