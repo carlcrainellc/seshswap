@@ -354,7 +354,32 @@ func (e *Engine) ack(ctx context.Context, r *Record) error {
 	return e.sendIntent(ctx, r, "ack", e.EthKey, nil, eth.EncodeAckLocked(r.Swap, to, sig), r.Phase)
 }
 
+// claimTo is where the claim pays. With ExitPay that is the forwarder, but
+// only if the target is deployable (ExitPay.deploy reverts on a zero refund
+// address, zero hours or zero max cost, and money at an undeployable address
+// is stuck). Otherwise the claim goes straight to the refund address, or is
+// refused when there is none.
+func claimTo(r *Record) (eth.Address, error) {
+	if r.ExitPay == nil {
+		return r.PayoutTo, nil
+	}
+	if err := r.ExitPay.CheckPay(r.PayoutTo); err != nil {
+		if r.ExitPay.RefundTo.IsZero() {
+			return eth.Address{}, fmt.Errorf("refusing to claim to an unusable exit pay target: %v", err)
+		}
+		return r.ExitPay.RefundTo, fmt.Errorf("claiming to the refund address instead: %v", err)
+	}
+	return r.PayoutTo, nil
+}
+
 func (e *Engine) claim(ctx context.Context, r *Record, now, deadline uint64) error {
+	to, err := claimTo(r)
+	if err != nil && to.IsZero() {
+		return err
+	}
+	if err != nil {
+		e.logf(r, "exit pay: %v", err)
+	}
 	ck, err := eth.KeyFromHex(r.ClaimerKey)
 	if err != nil {
 		return err
@@ -374,7 +399,7 @@ func (e *Engine) claim(ctx context.Context, r *Record, now, deadline uint64) err
 	if feeOK && len(e.Relayers) > 0 && (r.RelayTries < 2*len(e.Relayers) || e.EthKey == nil) {
 		url := e.Relayers[r.RelayTries%len(e.Relayers)]
 		r.RelayTries++
-		c := eth.SignClaim(ck, e.K.ChainID, e.K.Addr, r.Swap, my.Int(), r.PayoutTo, eth.Address{}, fee)
+		c := eth.SignClaim(ck, e.K.ChainID, e.K.Addr, r.Swap, my.Int(), to, eth.Address{}, fee)
 		h, err := relay.Post(ctx, url, c)
 		r.RelaySentAt = now
 		r.Phase = MClaiming
@@ -391,7 +416,7 @@ func (e *Engine) claim(ctx context.Context, r *Record, now, deadline uint64) err
 		return errors.New("no relayer accepted the claim and no gas key is configured")
 	}
 	// self-relay with our own gas key: same signed claim, fee 0 to ourselves
-	c := eth.SignClaim(ck, e.K.ChainID, e.K.Addr, r.Swap, my.Int(), r.PayoutTo, e.EthKey.Address(), big.NewInt(0))
+	c := eth.SignClaim(ck, e.K.ChainID, e.K.Addr, r.Swap, my.Int(), to, e.EthKey.Address(), big.NewInt(0))
 	r.RelaySentAt = now
 	return e.sendReveal(ctx, r, "claim", e.EthKey, eth.EncodeClaimRelayed(c), MClaiming, deadline, now)
 }
@@ -415,6 +440,10 @@ func (e *Engine) xmrLockDeadlineFor(r *Record, t1 uint64) uint64 {
 func (e *Engine) settleExitPay(ctx context.Context, r *Record) {
 	t := r.ExitPay
 	if t == nil || r.ExitPayDone {
+		return
+	}
+	if err := t.CheckPay(r.PayoutTo); err != nil {
+		e.logf(r, "exit pay: not settling: %v", err)
 		return
 	}
 	if done, err := exitpay.Done(ctx, e.K.C, t.Address); err == nil && done {

@@ -55,3 +55,46 @@ func TestRefPerSession(t *testing.T) {
 		t.Fatal("ref must be per session and stable")
 	}
 }
+
+// L-1: ExitPay.deploy reverts on these, so the forwarder could never get
+// code; swapd must not resolve, settle or pay to such a target.
+func TestUndeployableRejected(t *testing.T) {
+	for name, f := range map[string]func(*Target){
+		"zero refund":    func(x *Target) { x.RefundTo = eth.Address{} },
+		"zero hours":     func(x *Target) { x.Hours = 0 },
+		"zero max":       func(x *Target) { x.MaxCost = big.NewInt(0) },
+		"negative max":   func(x *Target) { x.MaxCost = big.NewInt(-1) },
+		"max > 256 bits": func(x *Target) { x.MaxCost = new(big.Int).Lsh(big.NewInt(1), 256) },
+	} {
+		x := target()
+		f(x)
+		if x.Check() == nil {
+			t.Errorf("%s: Check accepted", name)
+		}
+		if err := x.Resolve(nil, nil); err == nil { // must fail before any RPC
+			t.Errorf("%s: Resolve accepted", name)
+		}
+		x.Address = x.Factory
+		if x.CheckPay(x.Address) == nil {
+			t.Errorf("%s: CheckPay accepted", name)
+		}
+	}
+	var nilT *Target
+	if nilT.Check() == nil {
+		t.Error("nil target accepted")
+	}
+}
+
+func TestCheckPay(t *testing.T) {
+	x := target()
+	if x.CheckPay(eth.Address{}) == nil {
+		t.Error("unresolved forwarder accepted")
+	}
+	x.Address[19] = 9
+	if err := x.CheckPay(x.Address); err != nil {
+		t.Fatal(err)
+	}
+	if x.CheckPay(x.RefundTo) == nil {
+		t.Error("payout to a non-forwarder accepted")
+	}
+}

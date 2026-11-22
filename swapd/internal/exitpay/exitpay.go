@@ -71,8 +71,13 @@ func EncodePayAddress(t *Target) []byte { return append(append([]byte{}, selPayA
 func EncodeDeploy(t *Target) []byte     { return append(append([]byte{}, selDeploy...), t.tuple()...) }
 func EncodeSettle(t *Target) []byte     { return append(append([]byte{}, selSettle...), t.tuple()...) }
 
-// Check rejects targets the factory would refuse.
+// Check rejects targets the factory would refuse. ExitPay.deploy reverts on
+// these, so the forwarder address could never get code and anything paid to
+// it would be stuck: never compute, quote or pay to such a target.
 func (t *Target) Check() error {
+	if t == nil {
+		return errors.New("exit pay: no target")
+	}
 	switch {
 	case t.Factory.IsZero():
 		return errors.New("exit pay: no factory")
@@ -82,6 +87,8 @@ func (t *Target) Check() error {
 		return errors.New("exit pay: hours must be at least 1")
 	case t.MaxCost == nil || t.MaxCost.Sign() <= 0:
 		return errors.New("exit pay: max cost must be set")
+	case !eth.FitsU256(t.MaxCost):
+		return errors.New("exit pay: max cost out of range")
 	case !strings.HasSuffix(t.BuyerSesh, ".sesh") || len(t.BuyerSesh) != 57:
 		return fmt.Errorf("exit pay: bad buyer address %q", t.BuyerSesh)
 	}
@@ -103,6 +110,21 @@ func (t *Target) Resolve(ctx context.Context, c *eth.Client) error {
 	copy(t.Address[:], out[12:])
 	if t.Address.IsZero() {
 		return errors.New("exit pay: factory returned the zero address")
+	}
+	return nil
+}
+
+// CheckPay reports whether a claim may pay to `to` for this target: the
+// target must be deployable and `to` must be its resolved forwarder.
+func (t *Target) CheckPay(to eth.Address) error {
+	if err := t.Check(); err != nil {
+		return err
+	}
+	if t.Address.IsZero() {
+		return errors.New("exit pay: forwarder address not resolved")
+	}
+	if to != t.Address {
+		return errors.New("exit pay: payout address is not the forwarder")
 	}
 	return nil
 }
