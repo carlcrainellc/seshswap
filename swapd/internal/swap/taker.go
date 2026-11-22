@@ -167,13 +167,21 @@ func (e *Engine) stepTaker(ctx context.Context, r *Record, head *eth.Head) error
 		if state.Stage == eth.StatusReady || now >= s.T1 {
 			return nil // claimer's window; wait for its intent or for t2 to be final
 		}
+		cancelDue := now+2*e.Policy.Margin >= s.T1 && cancelAllowed(state, now)
 		need, err := e.requiredConfs(ctx, r)
 		if err != nil {
 			return err
 		}
 		funds, _, err := e.sharedFunds(ctx, r, need)
 		if err != nil {
-			return err
+			if !cancelDue {
+				return err
+			}
+			// Fail safe: without a working Monero link the XMR cannot be
+			// confirmed, and waiting past t1 hands the claim window to the
+			// maker. Cancel now (refund, minus the premium if acked).
+			e.logf(r, "cannot check the shared XMR (%v) and t1 is near; cancelling", err)
+			funds = 0
 		}
 		if funds >= r.XMR && r.LockMismatch == "" {
 			e.logf(r, "XMR at shared address confirmed (%d >= %d piconero, %d+ confs); marking ready", funds, r.XMR, need)

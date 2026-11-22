@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -198,7 +199,24 @@ func (w *Wallet) Session(ctx context.Context, name string, fn func(s *Sess) erro
 		}
 		w.open = name
 	}
-	return fn(&Sess{w})
+	err := fn(&Sess{w})
+	if isNoWallet(err) {
+		// wallet-rpc lost the open wallet (restarted, or another client
+		// switched wallets): reopen once and retry instead of failing until
+		// swapd restarts.
+		w.open = ""
+		if oerr := w.r.call(ctx, nil, "open_wallet", map[string]any{"filename": name, "password": w.password}); oerr != nil {
+			return oerr
+		}
+		w.open = name
+		err = fn(&Sess{w})
+	}
+	return err
+}
+
+// isNoWallet reports wallet-rpc error -13 ("No wallet file").
+func isNoWallet(err error) bool {
+	return err != nil && strings.Contains(err.Error(), ": -13 ")
 }
 
 // Create makes a new random wallet file (fails if it exists).
