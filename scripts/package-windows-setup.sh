@@ -42,7 +42,8 @@ echo "$RUSTY_SHA256  $RS" | sha256sum -c --status || { echo "rusty-setup.exe: SH
 
 echo "== payload"
 WORK="$(mktemp -d)"
-cleanup() { rm -rf --one-file-system "$WORK" "$PAYLOAD"; }
+SYSO="$HERE/swapd/cmd/seshswap-setup/rsrc_windows_amd64.syso"
+cleanup() { rm -rf --one-file-system "$WORK" "$PAYLOAD"; rm -f "$SYSO"; }
 trap cleanup EXIT
 rm -rf --one-file-system "$PAYLOAD"
 mkdir -p "$PAYLOAD"
@@ -55,6 +56,7 @@ printf '\nInstalled by SeshSwap-setup.exe: Rusty %s (rusty-setup.exe, sha256\n%s
 
 echo "== SeshSwap-setup.exe ($VER)"
 OUT="$OUTDIR/SeshSwap-setup.exe"
+"$HERE/scripts/winres.sh" "$HERE/swapd/cmd/seshswap-setup" "$VER" "SeshSwap setup (testnet)" SeshSwap-setup.exe
 (cd swapd && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags seshswap_setup -trimpath \
   -ldflags "-s -w -buildid= -X main.version=$VER -X main.rustyVersion=$RUSTY_VERSION -X main.rustySHA256=$RUSTY_SHA256" \
   -o "$OUT" ./cmd/seshswap-setup)

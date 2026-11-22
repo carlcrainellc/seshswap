@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <title>SeshSwap</title>
+  <rect width="16" height="16" rx="3.5" fill="#0E1620"/>
+  <g fill="none" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M8 8h2.5a2 2 0 0 1 0 4H4M5.5 10.5l-1.5 1.5 1.5 1.5" stroke="#A3B1FF"/>
+    <path d="M12 4H5.5a2 2 0 0 0 0 4H8M10.5 2.5l1.5 1.5-1.5 1.5" stroke="#46D3B0"/>
+  </g>
+</svg>

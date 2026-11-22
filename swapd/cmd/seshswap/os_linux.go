@@ -208,3 +208,5 @@ func check() int {
 	}
 	return 0
 }
+
+func consoleTitle(string) {}

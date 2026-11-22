@@ -1,1 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#141821"/><path d="M18 24h22l-6-6M46 40H24l6 6" fill="none" stroke="#f26822" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>SeshSwap</title>
+  <rect width="64" height="64" rx="15" fill="#0E1620"/>
+  <g fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 32h7a7 7 0 0 1 0 14H18M24 40l-6 6 6 6" stroke="#A3B1FF"/>
+    <path d="M46 18H25a7 7 0 0 0 0 14h7M40 12l6 6-6 6" stroke="#46D3B0"/>
+  </g>
+</svg>

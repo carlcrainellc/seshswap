@@ -74,6 +74,7 @@ type Config struct {
 	Poll               string        `json:"poll,omitempty"`
 	AllowMainnet       bool          `json:"iUnderstandThisIsUnauditedAndMayLoseFunds"`
 	Demo               bool          `json:"demo,omitempty"` // sample data for screenshots; no real funds
+	AppVersion         string        `json:"-"`              // shown on the Settings screen
 	Policy             *swap.Policy  `json:"policy,omitempty"`
 	FaucetURL          string        `json:"faucetUrl,omitempty"` // testnet faucet; "" = DefaultFaucetURL, "off" = hide
 }
@@ -345,6 +346,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"exists":     Exists(s.Cfg.DataDir),
 		"testOnly":   true,
 		"audited":    false,
+		"version":    s.Cfg.AppVersion,
 	}
 	if s.vault != nil {
 		st["ethAddress"] = s.vault.Keys.EthAddr.Hex()

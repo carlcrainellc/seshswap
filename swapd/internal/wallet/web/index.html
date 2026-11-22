@@ -5,23 +5,53 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="wallet-token" content="">
 <title>SeshSwap</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' width='64' height='64'%3E%3Crect width='64' height='64' rx='15' fill='%230E1620'/%3E%3Cg fill='none' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M32 32h7a7 7 0 0 1 0 14H18M24 40l-6 6 6 6' stroke='%23A3B1FF'/%3E%3Cpath d='M46 18H25a7 7 0 0 0 0 14h7M40 12l6 6-6 6' stroke='%2346D3B0'/%3E%3C/g%3E%3C/svg%3E">
 <style>
   :root {
-    --bg: #0c1017;
-    --bg2: #121823;
-    --card: #161c27;
-    --card2: #1c2432;
-    --line: #2a3344;
-    --text: #e8edf5;
-    --muted: #8b97a8;
-    --accent: #5ee0b5;
-    --accent-dim: #1d4d3d;
-    --warn: #f0c14b;
-    --danger: #f07178;
-    --ok: #5ee0b5;
+    /* SeshSwap palette (branding/README.md): ink neutrals, jade accent, periwinkle second. */
+    color-scheme: dark;
+    --bg: #0B0F14;
+    --bg2: #0F151C;
+    --card: #141B23;
+    --card2: #19222C;
+    --line: #26313D;
+    --text: #E6EDF3;
+    --muted: #8A98A8;
+    --accent: #46D3B0;
+    --accent-ink: #05261E;
+    --accent-dim: #164A3E;
+    --accent2: #A3B1FF;
+    --warn: #F0C14B;
+    --warn-ink: #2A1E00;
+    --warn-bg: #2A2410;
+    --warn-line: #5A4A18;
+    --danger: #F07178;
+    --ok: #46D3B0;
     --shadow: 0 12px 40px rgba(0,0,0,.35);
     --radius: 16px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #F5F7F9;
+      --bg2: #ECF0F3;
+      --card: #FFFFFF;
+      --card2: #F4F7F9;
+      --line: #D9E0E6;
+      --text: #0E1620;
+      --muted: #566474;
+      --accent: #0B8A6F;
+      --accent-ink: #FFFFFF;
+      --accent-dim: #BFE9DD;
+      --accent2: #5A6BE0;
+      --warn: #8A5A00;
+      --warn-ink: #FFFFFF;
+      --warn-bg: #FFF6DB;
+      --warn-line: #E9D28A;
+      --danger: #C93C45;
+      --ok: #0B8A6F;
+      --shadow: 0 6px 24px rgba(14,22,32,.08);
+    }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
@@ -34,8 +64,9 @@
     padding: 24px 16px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
   .brand { font-weight: 650; letter-spacing: -.02em; font-size: 18px; margin: 0 8px 18px;
     display: flex; align-items: center; gap: 10px; }
-  .brand i { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg,#5ee0b5,#3aa0c8);
-    display: inline-block; }
+  .brand svg { width: 28px; height: 28px; display: block; flex-shrink: 0; border-radius: 7px; box-shadow: 0 0 0 1px var(--line); }
+  .brand .tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--accent2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
   .navbtn { background: none; border: 0; color: var(--muted); text-align: left; padding: 10px 12px;
     border-radius: 10px; width: 100%; }
   .navbtn:hover, .navbtn.on { background: var(--card); color: var(--text); }
@@ -45,11 +76,11 @@
   .conn i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; margin-top: 4px; }
   .conn.connecting i { background: var(--warn); }
   .conn.connected i { background: var(--accent); }
-  .conn.error i { background: #e06c6c; }
-  .conn.error { color: #f0a0a0; }
+  .conn.error i { background: var(--danger); }
+  .conn.error { color: var(--danger); }
   .conn small { display: block; color: var(--muted); margin-top: 2px; }
   .main { flex: 1; padding: 36px 44px; max-width: 880px; }
-  .banner { background: #2a2410; border: 1px solid #5a4a18; color: var(--warn);
+  .banner { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn);
     padding: 10px 14px; border-radius: 10px; margin-bottom: 20px; font-size: 14px; }
   .banner a, .banner button.link { color: var(--warn); }
   .h1 { font-size: 28px; font-weight: 650; letter-spacing: -.03em; margin: 0 0 8px; }
@@ -63,12 +94,12 @@
   .bal .v { font-size: 26px; font-weight: 650; letter-spacing: -.03em; margin: 4px 0; }
   .card .a { color: var(--muted); font-size: 13px; }
   .bal .a { color: var(--muted); font-size: 12px; word-break: break-all; }
-  .btn { background: var(--accent); color: #06261b; border: 0; border-radius: 12px;
+  .btn { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 12px;
     padding: 11px 18px; font-weight: 650; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn:hover:not(:disabled) { filter: brightness(1.05); }
   .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
-  .btn.warn { background: var(--warn); color: #2a1e00; }
+  .btn.warn { background: var(--warn); color: var(--warn-ink); }
   .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
   .btn.big { padding: 14px 22px; font-size: 17px; }
   .stack { display: flex; flex-direction: column; gap: 12px; }
@@ -83,7 +114,7 @@
   .words div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
     padding: 8px 10px; font-variant-numeric: tabular-nums; }
   .words b { color: var(--muted); font-weight: 500; margin-right: 6px; font-size: 12px; }
-  .warnbox { background: #2a2410; border: 1px solid #5a4a18; color: var(--warn);
+  .warnbox { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn);
     padding: 12px 14px; border-radius: 10px; font-size: 14px; }
   .timeline { list-style: none; padding: 0; margin: 16px 0; }
   .timeline li { padding: 10px 0 10px 22px; border-left: 2px solid var(--line); position: relative; color: var(--muted); }
@@ -137,6 +168,8 @@ function esc(s){ return String(s??"").replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 function short(a){ a=String(a||""); return a.length>16 ? a.slice(0,8)+"…"+a.slice(-6) : a; }
 function copy(t){ navigator.clipboard.writeText(t); }
 
+const MARK = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#0E1620"/><g fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><path d="M32 32h7a7 7 0 0 1 0 14H18M24 40l-6 6 6 6" stroke="#A3B1FF"/><path d="M46 18H25a7 7 0 0 0 0 14h7M40 12l6 6-6 6" stroke="#46D3B0"/></g></svg>`;
+
 function connLine(st) {
   const c = (st && st.connection) || {};
   if (!c.label) return "";
@@ -152,7 +185,7 @@ function shell(main, {nav}={}) {
   const navItem = (id, label) => `<button class="navbtn ${nav===id?"on":""}" data-go="${id}">${label}</button>`;
   return `
   ${unlocked ? `<aside class="sidebar">
-    <div class="brand"><i></i> SeshSwap</div>
+    <div class="brand">${MARK} SeshSwap</div>
     ${navItem("home","Balances")}
     ${navItem("swap","Swap")}
     ${navItem("send","Send")}
@@ -178,7 +211,7 @@ function shell(main, {nav}={}) {
 
 function welcome() {
   return `<div class="center">
-    <div class="brand" style="margin-bottom:24px"><i></i> SeshSwap</div>
+    <div class="brand" style="margin-bottom:24px">${MARK} SeshSwap <span class="tag">testnet</span></div>
     <h1 class="h1">Swap ETH for Monero, without giving anyone your money.</h1>
     <p class="lead">A non-custodial wallet for ETH, USDC and XMR. If a trade goes wrong, your ETH is returned automatically. This build is for testnets only, and it is not audited.</p>
     <div class="actions">
@@ -640,6 +673,7 @@ function settings() {
       ${state.backupWords ? `<div class="words">${state.backupWords.map((w,i)=>`<div><b>${i+1}</b>${esc(w)}</div>`).join("")}</div>` : ""}
       ${err()}
     </div>
+    <p class="a" data-testid="about" style="margin-top:16px">SeshSwap${st.version ? " " + esc(st.version) : ""} · <a href="https://seshswap.app" target="_blank" rel="noopener">seshswap.app</a></p>
   `, {nav:"settings"});
 }
 

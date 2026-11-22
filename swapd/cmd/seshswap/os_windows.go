@@ -267,3 +267,12 @@ func pauseIfOwnConsole(when bool) {
 	fmt.Print("\nPress Enter to close this window.")
 	_, _ = fmt.Fscanln(os.Stdin)
 }
+
+// consoleTitle names the console window (the taskbar shows it next to the icon).
+func consoleTitle(t string) {
+	p, err := windows.UTF16PtrFromString(t)
+	if err != nil {
+		return
+	}
+	_, _, _ = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetConsoleTitleW").Call(uintptr(unsafe.Pointer(p)))
+}

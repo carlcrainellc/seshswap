@@ -30,6 +30,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -73,6 +74,9 @@ func run() (quiet bool, err error) { // quiet: don't wait for Enter
 	uninstall := flag.Bool("uninstall", false, "remove the SeshSwap program and its Start menu entry (keeps Rusty and your wallet data)")
 	flag.Parse()
 	fmt.Printf("SeshSwap setup %s (testnet only; not audited)\n\n", version)
+	if t, err := windows.UTF16PtrFromString("SeshSwap setup " + version); err == nil {
+		_, _, _ = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetConsoleTitleW").Call(uintptr(unsafe.Pointer(t)))
+	}
 	if !elevated() {
 		fmt.Println("Setup needs administrator rights; asking Windows…")
 		if err := relaunchElevated(); err != nil {

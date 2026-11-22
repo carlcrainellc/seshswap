@@ -219,6 +219,8 @@ func run() int {
 
 	cfg.ApplyChain()
 	log.Printf("SeshSwap %s, %s (chain id %d)", version, cfg.ChainLabel, cfg.ChainID)
+	cfg.AppVersion = version
+	consoleTitle("SeshSwap " + version)
 	s := wallet.NewServer(cfg.Config)
 	if err := wallet.WriteAPIFile(cfg.DataDir, cfg.Listen); err != nil {
 		log.Print(err)

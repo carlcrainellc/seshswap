@@ -46,8 +46,12 @@ fetch() { # sha256 url -> path in cache
 crlf() { sed 's/\r*$/\r/' "$1"; } # Notepad-friendly line ends
 
 echo "== wallet ($VER)"
+SYSO="$HERE/swapd/cmd/seshswap/rsrc_windows_amd64.syso"
+trap 'rm -rf --one-file-system "$WORK"; rm -f "$SYSO"' EXIT
+"$HERE/scripts/winres.sh" "$HERE/swapd/cmd/seshswap" "$VER" "SeshSwap wallet (testnet)" seshswap.exe
 (cd swapd && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
   -ldflags "-s -w -buildid= -X main.version=$VER" -o "$STAGE/seshswap.exe" ./cmd/seshswap)
+rm -f "$SYSO"
 
 echo "== monero-wallet-rpc $MONERO_V"
 MC="$CACHE/monero-$MONERO_V"
