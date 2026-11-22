@@ -30,7 +30,8 @@
 //   claimer ("Bob")   locks XMR, wants ETH. Signs intents/claims (needs no ETH).
 //
 // Who may do what (exclusive at every moment; tested by fuzzing):
-//   PENDING, now < t1          owner: setReady, cancelIntent      claimer: ackLocked
+//   PENDING, now < t1          owner: setReady                    claimer: ackLocked
+//   PENDING, lockIn <= now < t1 owner: cancelIntent (lockIn = lock time + LOCK_IN)
 //   READY,   now < t2          claimer: claimIntent
 //   PENDING, t1 <= now < t2    claimer: claimIntent
 //   CANCELLING, now < deadline owner: refund (cancel)
@@ -40,6 +41,7 @@
 //   PENDING/READY, now >= t2   owner: refund
 //   deadline(CLAIMING)   = max(t2, intent time + grace)
 //   deadline(CANCELLING) = intent time + grace
+//   deadline(PENDING/READY) = lock time + LOCK_IN (the lock-in window, see cancelIntent)
 //
 // Design credits (no code copied): two-timeout Ready/Claim/Refund protocol from
 // AthanorLabs/atomic-swap docs/protocol.md; adaptor-free "reveal a key share"
@@ -75,7 +77,7 @@ contract XmrSwapV3 {
     /// One storage slot per swap.
     struct Status {
         Stage stage;
-        uint64 deadline;     // end of the freeze while CLAIMING / CANCELLING
+        uint64 deadline;     // end of the freeze while CLAIMING / CANCELLING; end of the lock-in while PENDING / READY
         address premiumTo;   // set by ackLocked; 0 = no ack
     }
 
@@ -96,6 +98,11 @@ contract XmrSwapV3 {
     /// very long one would let either side delay the other for too long.
     uint64 public constant MIN_GRACE = 30 minutes;
     uint64 public constant MAX_GRACE = 48 hours;
+    /// Lock-in window: for this long after lock() the owner cannot cancelIntent,
+    /// so a claimer who locks XMR and acks inside it can't be front-run by a
+    /// cancel that keeps the premium. Fixed (nobody can extend it) and shorter
+    /// than MIN_D1, so it always ends before t1 and never touches refunds.
+    uint64 public constant LOCK_IN = 20 minutes;
 
     bytes32 private immutable _domainSeparator;
     uint256 private immutable _chainId;
@@ -207,7 +214,7 @@ contract XmrSwapV3 {
         Swap memory s = Swap(msg.sender, claimer, claimKey, refundKey, t1, t1 + d2, grace, asset, value, premium, salt);
         id = swapId(s);
         if (status[id].stage != Stage.NONE) revert Exists();
-        status[id] = Status(Stage.PENDING, 0, address(0));
+        status[id] = Status(Stage.PENDING, uint64(block.timestamp) + LOCK_IN, address(0));
 
         if (asset == address(0)) {
             if (msg.value != value + premium) revert BadParams(); // reverts on overflow
@@ -238,13 +245,14 @@ contract XmrSwapV3 {
     }
 
     /// Step 1 of an early cancel: freezes the claimer for `grace`. Carries no secret.
-    /// Only once per swap, only while PENDING and before t1.
+    /// Only once per swap, only while PENDING, from the end of the lock-in window
+    /// (lock time + LOCK_IN, kept in `deadline`) until t1.
     function cancelIntent(Swap calldata s) external nonReentrant {
         bytes32 id = swapId(s);
         Status storage st = status[id];
         if (st.stage != Stage.PENDING) revert WrongStatus();
         if (msg.sender != s.owner) revert NotAllowed();
-        if (block.timestamp >= s.t1) revert WrongTime();
+        if (block.timestamp >= s.t1 || block.timestamp < st.deadline) revert WrongTime();
         uint64 d = uint64(block.timestamp) + s.grace;
         st.stage = Stage.CANCELLING;
         st.deadline = d;

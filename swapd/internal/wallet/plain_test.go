@@ -142,3 +142,16 @@ func TestPublicViewUSDCLabel(t *testing.T) {
 		t.Fatalf("refund should mention USDC: %q", v.RefundLine)
 	}
 }
+
+func TestPlainStatusShowsCancelFrom(t *testing.T) {
+	r := swap.Record{Role: swap.Taker, Phase: swap.TLocked, Value: big.NewInt(1), Grace: 3600,
+		Swap: &eth.Swap{T1: 1700003600, T2: 1700007200, Grace: 3600, Value: big.NewInt(1)}, CancelFrom: 1700001200}
+	_, line, _, _ := plainStatus(r, time.Unix(1700000000, 0))
+	if !strings.Contains(line, "early cancel is possible from") {
+		t.Fatalf("no cancel time: %q", line)
+	}
+	_, line, _, _ = plainStatus(r, time.Unix(1700001200, 0))
+	if strings.Contains(line, "early cancel") {
+		t.Fatalf("cancel time shown after the window: %q", line)
+	}
+}

@@ -58,6 +58,12 @@ contract SeshRegistryTest is Test {
 
     string constant MSESH = "bog6mtasrhyriq5b35qidik4e3earg9om8d989hhza3jaeb5oqwo.sesh";
 
+    /// Warp past the V3 lock-in window (cancelIntent is refused before it).
+    function _li(XmrSwapV3 k, XmrSwapV3.Swap memory s) internal {
+        (, uint64 d,) = k.status(k.swapId(s));
+        if (block.timestamp < d) vm.warp(d);
+    }
+
     function setUp() public {
         vm.warp(1_000_000);
         v3 = new XmrSwapV3();
@@ -351,6 +357,7 @@ contract SeshRegistryTest is Test {
         (XmrSwapV3.Swap memory s, bytes32 id) = lockEth(0.001 ether, bytes32(uint256(1)));
         doCommit(lid, s, MIN_PEN);
         vm.warp(block.timestamp + ATTEST);
+        _li(v3, s);
         vm.prank(alice);
         v3.cancelIntent(s);
         reg.slash(id);

@@ -150,6 +150,9 @@ func (e *Engine) stepMaker(ctx context.Context, r *Record, head *eth.Head) error
 		}
 		// "My XMR is locked": from now on a cancel by the taker costs it the premium.
 		if r.Swap.PremiumOrZero().Sign() > 0 && !r.AckSent && st == eth.StatusPending && now < r.Swap.T1 {
+			if lateAck(state, now) {
+				e.logf(r, "acking after the taker's lock-in window ended: a cancel sent first would keep the premium")
+			}
 			return e.ack(ctx, r)
 		}
 		if st != eth.StatusClaiming {
@@ -485,4 +488,11 @@ func (e *Engine) SettleExitPay(ctx context.Context, id string) error {
 		e.settleExitPay(ctx, r)
 		return nil
 	})
+}
+
+// lateAck: the lock-in window (during which the taker can't cancel) is over,
+// so an ack can be front-run by a cancel that keeps the premium.
+func lateAck(state *eth.State, now uint64) bool {
+	cf := state.CancelFrom()
+	return cf != 0 && now >= cf
 }

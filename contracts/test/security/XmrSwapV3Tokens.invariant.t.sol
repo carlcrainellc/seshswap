@@ -75,6 +75,7 @@ contract V3TokenHandler is Test {
     bool public wrongCallerWorked;
     bool public feeLockAccepted;
     bool public terminalChanged;
+    bool public cancelInLockIn;  // a cancel intent succeeded inside the lock-in window
     uint256 public nClaims;
     uint256 public nRefunds;
     uint256 public nDeferred;
@@ -209,8 +210,9 @@ contract V3TokenHandler is Test {
     function cancel(uint256 i) external {
         if (swaps.length == 0) return;
         S memory x = swaps[i % swaps.length];
-        if (x.viaContract) { try oc.cancel(x.s) {} catch {} }
-        else { vm.prank(alice); try c.cancelIntent(x.s) {} catch {} }
+        bool inWin = block.timestamp < x.s.t1 - 1 hours + c.LOCK_IN(); // lock time = t1 - 1h
+        if (x.viaContract) { try oc.cancel(x.s) { if (inWin) cancelInLockIn = true; } catch {} }
+        else { vm.prank(alice); try c.cancelIntent(x.s) { if (inWin) cancelInLockIn = true; } catch {} }
     }
 
     function intent(uint256 i, bool forged) external {
@@ -381,6 +383,8 @@ contract XmrSwapV3TokenInvariants is Test {
     function invariant_FeeOnTransferRejected() public view { assertTrue(!h.feeLockAccepted()); }
 
     function invariant_TerminalFinal() public view { assertTrue(!h.terminalChanged()); }
+
+    function invariant_NoCancelInLockIn() public view { assertTrue(!h.cancelInLockIn()); }
 
     function invariant_ReentryNeverSucceeds() public view { assertTrue(!h.evil().reentrySucceeded()); }
 }

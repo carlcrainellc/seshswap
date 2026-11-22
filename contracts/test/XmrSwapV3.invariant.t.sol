@@ -28,6 +28,12 @@ contract HandlerV3 is Test {
     bool public revealDuringFreeze;  // a reveal succeeded while the other side's freeze should block it
     mapping(bytes32 => bool) public acked;
     mapping(bytes32 => bool) public cancelled;
+    mapping(bytes32 => uint256) public lockedAt;
+    mapping(bytes32 => bool) public ackedInWindow;
+    bool public cancelInLockIn;      // a cancel intent succeeded before lock time + LOCK_IN
+    bool public premiumDodged;       // a cancel kept the premium although the ack came inside the window
+    uint256 public nAcksInWindow;
+    uint256 public nCancelTriesInLockIn;
     uint256 salt;
     uint256 aliceBal0;   // balance snapshots kept in storage (avoids stack-too-deep)
     uint256 sinkBal0;
@@ -71,6 +77,7 @@ contract HandlerV3 is Test {
         vm.prank(alice);
         c.lock{value: s.value + s.premium}(bob, BOB_K, ALICE_K, d1, s.t2 - s.t1, s.grace, address(0), s.value, s.premium, s.salt);
         swaps.push(s);
+        lockedAt[c.swapId(s)] = block.timestamp;
         ghostLocked += s.value + s.premium;
     }
 
@@ -87,13 +94,40 @@ contract HandlerV3 is Test {
     }
 
     function warp(uint256 dt) external { vm.warp(block.timestamp + bound(dt, 0, 3 days)); }
+    /// small steps so the lock-in window and its edge get hit
+    function warpSmall(uint256 dt) external { vm.warp(block.timestamp + bound(dt, 0, 25 minutes)); }
+
+    function _inLockIn(bytes32 id) internal view returns (bool) {
+        return block.timestamp < lockedAt[id] + c.LOCK_IN();
+    }
+
+    /// The taker sees the maker's ack coming and tries to cancel first (same block).
+    function frontRunAck(uint256 i) external {
+        (XmrSwapV3.Swap memory s, bytes32 id, bool ok) = _pick(i);
+        if (!ok) return;
+        (uint8 b,) = _st(id);
+        bool inWin = _inLockIn(id);
+        if (inWin) nCancelTriesInLockIn++;
+        vm.prank(alice);
+        try c.cancelIntent(s) { cancelled[id] = true; nCancels++; if (inWin) cancelInLockIn = true; } catch {}
+        (uint8 v, bytes32 r, bytes32 ss) = vm.sign(BOB_PK, c.ackDigest(id, sink));
+        try c.ackLocked(s, sink, v, r, ss) {
+            acked[id] = true; nAcks++;
+            if (inWin) { ackedInWindow[id] = true; nAcksInWindow++; }
+        } catch {}
+        _after(id, b);
+    }
 
     function ack(uint256 i) external {
         (XmrSwapV3.Swap memory s, bytes32 id, bool ok) = _pick(i);
         if (!ok) return;
         (uint8 b,) = _st(id);
         (uint8 v, bytes32 r, bytes32 ss) = vm.sign(BOB_PK, c.ackDigest(id, sink));
-        try c.ackLocked(s, sink, v, r, ss) { acked[id] = true; nAcks++; } catch {}
+        bool inWin = _inLockIn(id);
+        try c.ackLocked(s, sink, v, r, ss) {
+            acked[id] = true; nAcks++;
+            if (inWin) { ackedInWindow[id] = true; nAcksInWindow++; }
+        } catch {}
         _after(id, b);
     }
 
@@ -110,8 +144,10 @@ contract HandlerV3 is Test {
         (XmrSwapV3.Swap memory s, bytes32 id, bool ok) = _pick(i);
         if (!ok) return;
         (uint8 b,) = _st(id);
+        bool inWin = _inLockIn(id);
+        if (inWin) nCancelTriesInLockIn++;
         vm.prank(alice);
-        try c.cancelIntent(s) { cancelled[id] = true; nCancels++; } catch {}
+        try c.cancelIntent(s) { cancelled[id] = true; nCancels++; if (inWin) cancelInLockIn = true; } catch {}
         _after(id, b);
     }
 
@@ -181,6 +217,7 @@ contract HandlerV3 is Test {
             if (b == 5 && block.timestamp < d) revealDuringFreeze = true; // claimer's freeze
             if ((b == 1 || b == 2) && block.timestamp < s.t2) revealDuringFreeze = true; // claimer's window could open
             ghostPaidOut += s.value + s.premium;
+            if (b == 6 && ackedInWindow[id] && sink.balance - sinkBal0 != s.premium) premiumDodged = true;
             if (b == 6 && acked[id]) {
                 nForfeits++;
                 if (sink.balance - sinkBal0 != s.premium || alice.balance - aliceBal0 != s.value) wrongPremiumDest = true;
@@ -226,6 +263,8 @@ contract XmrSwapV3Invariants is Test {
         emit log_named_uint("cancel intents", h.nCancels());
         emit log_named_uint("acks", h.nAcks());
         emit log_named_uint("premium forfeits", h.nForfeits());
+        emit log_named_uint("acks inside lock-in", h.nAcksInWindow());
+        emit log_named_uint("cancel tries inside lock-in", h.nCancelTriesInLockIn());
     }
 
     /// Contract always holds exactly: value + premium of open swaps + deferred payouts.
@@ -248,6 +287,13 @@ contract XmrSwapV3Invariants is Test {
     /// A secret is only ever accepted inside its own side's freeze (or after t2 for the owner).
     function invariant_NoRevealDuringOtherSidesFreeze() public view {
         assertTrue(!h.revealDuringFreeze());
+    }
+
+    /// M-1: no cancel intent inside the lock-in window, and a taker can never
+    /// cancel and keep the premium when the maker acked inside the window.
+    function invariant_LockInProtectsAck() public view {
+        assertTrue(!h.cancelInLockIn(), "cancel inside lock-in");
+        assertTrue(!h.premiumDodged(), "premium kept after an in-window ack");
     }
 
     /// The premium goes to the acked address only when a refund settles a cancel after an ack.

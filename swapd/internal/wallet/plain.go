@@ -149,7 +149,11 @@ func plainStatus(r swap.Record, now time.Time) (status, refund string, refundAt,
 		if r.LockMismatch != "" {
 			status = fmt.Sprintf("The lock did not match what was agreed. Your %s will be refunded; we will not mark this ready.", assetWord(r))
 		}
-		return status, refundLine(r, t1, t2, grace), int64(t1), int64(t1 + grace)
+		line := refundLine(r, t1, t2, grace)
+		if r.CancelFrom != 0 && now.Unix() < int64(r.CancelFrom) {
+			line += fmt.Sprintf(" An early cancel is possible from %s (the other side first gets time to lock XMR).", formatCT(int64(r.CancelFrom)))
+		}
+		return status, line, int64(t1), int64(t1 + grace)
 	case swap.TReadying:
 		return fmt.Sprintf("Monero confirmations are in. Marking the swap ready."), refundLine(r, t1, t2, grace), int64(t1), int64(t1 + grace)
 	case swap.TReady:

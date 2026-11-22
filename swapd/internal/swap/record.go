@@ -135,7 +135,8 @@ type Record struct {
 	Approved     bool   `json:"approved"`
 	RelayTries   int    `json:"relayTries"`
 	IntentTries  int    `json:"intentTries,omitempty"`
-	IntentAt     uint64 `json:"intentAt,omitempty"` // chain time the claim/cancel intent was sent
+	IntentAt     uint64 `json:"intentAt,omitempty"`   // chain time the claim/cancel intent was sent
+	CancelFrom   uint64 `json:"cancelFrom,omitempty"` // taker: chain time an early cancel becomes possible (end of the lock-in)
 	AckSent      bool   `json:"ackSent,omitempty"`
 	RelaySentAt  uint64 `json:"relaySentAt"` // chain time of the last relay submission
 	ClaimTxHash  string `json:"claimTxHash,omitempty"`

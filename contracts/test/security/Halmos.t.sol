@@ -79,4 +79,20 @@ contract HalmosChecks is SecBase {
         vm.prank(who);
         try v3.setReady(s) { assert(who == alice && block.timestamp < s.t1); } catch {}
     }
+
+    /// M-1: cancelIntent succeeds only for the owner, from lock time + LOCK_IN until t1.
+    function check_cancelOnlyAfterLockIn(uint64 dt, address who) public {
+        address alice = address(0xA11CE);
+        vm.deal(alice, 1 ether);
+        uint256 t0 = block.timestamp;
+        XmrSwapV3.Swap memory s = XmrSwapV3.Swap(alice, address(0xB0B), BOB_K, ALICE_K,
+            uint64(t0) + 1 hours, uint64(t0) + 2 hours, 1 hours, address(0), 1 ether, 0, 0);
+        vm.prank(alice);
+        v3.lock{value: 1 ether}(address(0xB0B), BOB_K, ALICE_K, 1 hours, 1 hours, 1 hours, address(0), 1 ether, 0, 0);
+        vm.warp(t0 + dt);
+        vm.prank(who);
+        try v3.cancelIntent(s) {
+            assert(who == alice && block.timestamp >= t0 + v3.LOCK_IN() && block.timestamp < s.t1);
+        } catch {}
+    }
 }

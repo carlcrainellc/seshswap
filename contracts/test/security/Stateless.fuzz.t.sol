@@ -28,6 +28,12 @@ contract StatelessFuzz is SecBase {
     string constant BSESH = "rgwybw99m4d464rbi9z95a7a364n1hauo74ip486ssckf1agw7zo.sesh";
     uint256 constant N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
+    /// Warp past the V3 lock-in window (cancelIntent is refused before it).
+    function _li(XmrSwapV3 k, XmrSwapV3.Swap memory s) internal {
+        (, uint64 d,) = k.status(k.swapId(s));
+        if (block.timestamp < d) vm.warp(d);
+    }
+
     function setUp() public {
         vm.warp(1_000_000);
         (v3, reg, el, usdc) = deployAll();
@@ -149,11 +155,12 @@ contract StatelessFuzz is SecBase {
             uint64(block.timestamp) + 2 hours, 45 minutes, address(0), 1 ether, 0, 0);
         vm.prank(alice);
         bytes32 id = v3.lock{value: 1 ether}(bob, BOB_K, ALICE_K, 1 hours, 1 hours, 45 minutes, address(0), 1 ether, 0, 0);
+        if (cancel) _li(v3, s);
         vm.prank(alice);
         if (cancel) v3.cancelIntent(s);
         else if (ready) v3.setReady(s);
         (, uint64 d,) = v3.status(id);
-        uint64 base = which % 3 == 0 ? s.t1 : which % 3 == 1 ? s.t2 : (d == 0 ? s.t2 : d);
+        uint64 base = which % 3 == 0 ? s.t1 : which % 3 == 1 ? s.t2 : (cancel ? d : s.t2);
         int256 t = int256(uint256(base)) + int256(off % 5);
         if (t < int256(block.timestamp)) t = int256(block.timestamp);
         vm.warp(uint256(t));

@@ -15,7 +15,8 @@ import (
 // Deadlines (chain time):
 //
 //	setReady         any time before t1 once the XMR is confirmed (reveals nothing)
-//	cancel intent    from t1-2*margin until t1 if the XMR is not confirmed (reveals nothing)
+//	cancel intent    from t1-2*margin until t1 if the XMR is not confirmed (reveals nothing),
+//	                 never before the lock-in ends (lock time + eth.LockIn; the contract refuses it)
 //	cancel refund    once the cancel intent is final, while > margin is left before
 //	                 its deadline (the maker is frozen until then)
 //	late refund      once a FINAL block is at/after t2 (or after the maker's unrevealed
@@ -28,6 +29,9 @@ func (e *Engine) stepTaker(ctx context.Context, r *Record, head *eth.Head) error
 		state, err = e.K.State(ctx, r.SwapID)
 		if err != nil {
 			return err
+		}
+		if cf := state.CancelFrom(); cf != 0 {
+			r.CancelFrom = cf
 		}
 		switch state.Stage {
 		case eth.StatusClaimed:
@@ -176,6 +180,9 @@ func (e *Engine) stepTaker(ctx context.Context, r *Record, head *eth.Head) error
 			return e.sendIntent(ctx, r, "setReady", e.EthKey, nil, eth.EncodeSetReady(s), TReadying)
 		}
 		if now+2*e.Policy.Margin >= s.T1 {
+			if !cancelAllowed(state, now) {
+				return nil // lock-in window: the maker may still lock XMR and ack; cancel once it ends
+			}
 			e.logf(r, "XMR not confirmed in time (%d/%d); sending a cancel intent (no secret) before t1", funds, r.XMR)
 			r.IntentAt = now
 			return e.sendIntent(ctx, r, "cancel-intent", e.EthKey, nil, eth.EncodeCancelIntent(s), TCancelling)
@@ -256,4 +263,10 @@ func (e *Engine) sendIntentTo(ctx context.Context, r *Record, kind string, to et
 	k.Addr = to
 	tmp := &Engine{Role: e.Role, Store: e.Store, K: &k, Logf: e.Logf, CrashAfterIntent: e.CrashAfterIntent}
 	return tmp.sendIntent(ctx, r, kind, e.EthKey, new(big.Int), data, next)
+}
+
+// cancelAllowed: the contract accepts cancelIntent only while PENDING and from
+// the end of the lock-in window (CancelFrom; 0 on deployments without one).
+func cancelAllowed(state *eth.State, now uint64) bool {
+	return state.Stage == eth.StatusPending && now >= state.CancelFrom()
 }

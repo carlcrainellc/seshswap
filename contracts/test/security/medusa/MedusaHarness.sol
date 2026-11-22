@@ -30,6 +30,10 @@ contract MedusaV3 is V3TokenHandler {
         return !stolen && !badSecretWorked && !wrongCallerWorked && !feeLockAccepted && !terminalChanged
             && !evil.reentrySucceeded();
     }
+
+    function property_noCancelInLockIn() external view returns (bool) {
+        return !cancelInLockIn;
+    }
 }
 
 /// Registry + ExitLease handler for medusa.

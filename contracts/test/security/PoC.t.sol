@@ -25,6 +25,12 @@ contract SecurityPoC is SecBase {
     uint64 constant G = 30 minutes;
     string constant MSESH = "maker1.sesh";
 
+    /// Warp past the V3 lock-in window (cancelIntent is refused before it).
+    function _li(XmrSwapV3 k, XmrSwapV3.Swap memory s) internal {
+        (, uint64 d,) = k.status(k.swapId(s));
+        if (block.timestamp < d) vm.warp(d);
+    }
+
     function setUp() public {
         vm.warp(1_000_000);
         (v3, reg, el, usdc) = deployAll();
@@ -72,17 +78,24 @@ contract SecurityPoC is SecBase {
     }
 
     /// H-2 (fixed): the taker used to lock, commit and cancel at once (so the
-    /// maker never locks XMR and never acks) and then slash. A cancel made
-    /// before attestBy now blocks the slash, and so does a refund.
+    /// maker never locks XMR and never acks) and then slash. Now V3 refuses a
+    /// cancel inside the lock-in window, and a cancel made before attestBy
+    /// (possible when the attest window is longer than LOCK_IN) blocks the
+    /// slash, and so does a refund.
     function test_PoC_H2_CancelThenSlash() public {
         uint256 value = 0.001 ether;
         SeshRegistry.Commitment memory c = _commitment(value);
+        c.attestWindow = 30 minutes; // longer than LOCK_IN
         (uint8 v, bytes32 r, bytes32 ss) = _sign(c);
         (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(uint256(1000)));
         reg.commit(s, c, v, r, ss);
         vm.prank(taker);
-        v3.cancelIntent(s); // same block as the lock
-        vm.warp(block.timestamp + ATTEST);
+        vm.expectRevert(XmrSwapV3.WrongTime.selector);
+        v3.cancelIntent(s); // same block as the lock: inside the lock-in window
+        _li(v3, s);
+        vm.prank(taker);
+        v3.cancelIntent(s); // at lock-in end, still before attestBy
+        vm.warp(block.timestamp + 11 minutes); // past attestBy, inside the cancel freeze
         vm.expectRevert(SeshRegistry.WrongStatus.selector);
         reg.slash(id); // CANCELLING, cancelled before attestBy
         vm.prank(taker);
@@ -101,6 +114,7 @@ contract SecurityPoC is SecBase {
         (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(uint256(1001)));
         reg.commit(s, c, v, r, ss);
         vm.warp(block.timestamp + ATTEST);
+        _li(v3, s);
         vm.prank(taker);
         v3.cancelIntent(s);
         uint256 before = taker.balance;
@@ -112,6 +126,7 @@ contract SecurityPoC is SecBase {
     function testFuzz_H2_CancelTimingBoundary(uint8 off) public {
         uint256 value = 0.001 ether;
         SeshRegistry.Commitment memory c = _commitment(value);
+        c.attestWindow = 30 minutes; // attestBy after the lock-in end, so both sides of it are reachable
         (uint8 v, bytes32 r, bytes32 ss) = _sign(c);
         (XmrSwapV3.Swap memory s, bytes32 id) = _lock(value, bytes32(uint256(2000)));
         reg.commit(s, c, v, r, ss);
@@ -129,36 +144,99 @@ contract SecurityPoC is SecBase {
         }
     }
 
-    /// FINDING M-1: the premium can be dodged by front-running ackLocked.
-    /// The taker can see the maker's XMR arrive at the shared address (it holds
-    /// the shared view key). It then sends cancelIntent before the maker's
-    /// ackLocked is mined; ackLocked reverts (stage is no longer PENDING) and
-    /// the refund returns the premium to the taker. The maker's XMR is safe
-    /// (refund reveals the key share), but the premium meant to pay for this
-    /// griefing is never paid.
-    function test_PoC_M1_AckFrontRunKeepsPremium() public {
-        uint256 bobPk = 0xB0B5EC;
-        address bob = vm.addr(bobPk);
-        address sink = address(0x5111C);
-        uint256 value = 1 ether;
-        uint256 premium = 0.01 ether;
-        XmrSwapV3.Swap memory s = XmrSwapV3.Swap(
-            taker, bob, BOB_K, ALICE_K, uint64(block.timestamp) + D1, uint64(block.timestamp) + D1 + D2, G,
-            address(0), value, premium, bytes32(uint256(7))
+    function _premiumSwap(bytes32 salt) internal returns (XmrSwapV3.Swap memory s, bytes32 id) {
+        s = XmrSwapV3.Swap(
+            taker, vm.addr(M1_BOB), BOB_K, ALICE_K, uint64(block.timestamp) + D1, uint64(block.timestamp) + D1 + D2, G,
+            address(0), 1 ether, 0.01 ether, salt
         );
         vm.prank(taker);
-        bytes32 id = v3.lock{value: value + premium}(bob, BOB_K, ALICE_K, D1, D2, G, address(0), value, premium, s.salt);
-        // maker locks XMR off-chain and signs the ack ...
-        (uint8 v, bytes32 r, bytes32 ss) = vm.sign(bobPk, v3.ackDigest(id, sink));
-        // ... taker front-runs it
+        id = v3.lock{value: 1.01 ether}(s.claimer, BOB_K, ALICE_K, D1, D2, G, address(0), 1 ether, 0.01 ether, salt);
+    }
+
+    uint256 constant M1_BOB = 0xB0B5EC;
+    address constant M1_SINK = address(0x5111C);
+
+    /// M-1 (fixed with a lock-in window): the taker used to watch the maker's
+    /// XMR arrive and front-run ackLocked with cancelIntent, keeping the
+    /// premium. Now cancelIntent reverts until lock time + LOCK_IN, so an ack
+    /// sent inside the window always lands first; a later cancel forfeits the
+    /// premium to the maker.
+    function test_PoC_M1_AckFrontRunKeepsPremium() public {
+        (XmrSwapV3.Swap memory s, bytes32 id) = _premiumSwap(bytes32(uint256(7)));
+        uint256 lockInEnd = block.timestamp + v3.LOCK_IN();
+        (uint8 v, bytes32 r, bytes32 ss) = vm.sign(M1_BOB, v3.ackDigest(id, M1_SINK));
+        // the taker tries to front-run at once and at the last second of the window
         vm.prank(taker);
+        vm.expectRevert(XmrSwapV3.WrongTime.selector);
         v3.cancelIntent(s);
-        vm.expectRevert(XmrSwapV3.WrongStatus.selector);
-        v3.ackLocked(s, sink, v, r, ss);
+        vm.warp(lockInEnd - 1);
+        vm.prank(taker);
+        vm.expectRevert(XmrSwapV3.WrongTime.selector);
+        v3.cancelIntent(s);
+        v3.ackLocked(s, M1_SINK, v, r, ss); // lands
+        vm.warp(lockInEnd);
+        vm.prank(taker);
+        v3.cancelIntent(s); // allowed from exactly lockInEnd
         uint256 before = taker.balance;
         vm.prank(taker);
         v3.refund(s, ALICE_S);
-        assertEq(taker.balance - before, value + premium, "premium came back to the taker");
-        assertEq(sink.balance, 0);
+        assertEq(taker.balance - before, 1 ether, "taker gets only the value back");
+        assertEq(M1_SINK.balance, 0.01 ether, "premium goes to the maker");
+    }
+
+    /// Residual (by design): an ack sent after the window can still be
+    /// front-run. swapd's maker acks as soon as its XMR lock is broadcast.
+    function test_M1_AckAfterWindowCanStillBeFrontRun() public {
+        (XmrSwapV3.Swap memory s, bytes32 id) = _premiumSwap(bytes32(uint256(8)));
+        (uint8 v, bytes32 r, bytes32 ss) = vm.sign(M1_BOB, v3.ackDigest(id, M1_SINK));
+        _li(v3, s);
+        vm.prank(taker);
+        v3.cancelIntent(s);
+        vm.expectRevert(XmrSwapV3.WrongStatus.selector);
+        v3.ackLocked(s, M1_SINK, v, r, ss);
+        vm.prank(taker);
+        v3.refund(s, ALICE_S);
+        assertEq(M1_SINK.balance, 0);
+    }
+
+    /// Boundary: cancelIntent works iff lock time + LOCK_IN <= now < t1.
+    function testFuzz_M1_LockInBoundary(uint32 dt) public {
+        uint256 t0 = block.timestamp;
+        (XmrSwapV3.Swap memory s,) = _premiumSwap(bytes32(uint256(9)));
+        uint256 t = t0 + bound(dt, 0, D1 + 10);
+        vm.warp(t);
+        vm.prank(taker);
+        (bool ok,) = address(v3).call(abi.encodeCall(XmrSwapV3.cancelIntent, (s)));
+        assertEq(ok, t >= t0 + v3.LOCK_IN() && t < s.t1);
+        // the taker's funds are never trapped: a late refund always works
+        if (!ok) {
+            vm.warp(s.t2);
+            vm.prank(taker);
+            v3.refund(s, ALICE_S);
+        }
+    }
+
+    /// Any ack inside the window, followed by a cancel at any later time it is
+    /// allowed: the premium always goes to the maker.
+    function testFuzz_M1_AckInWindowAlwaysPaysPremium(uint32 ackAt, uint32 cancelAt) public {
+        uint256 t0 = block.timestamp;
+        (XmrSwapV3.Swap memory s, bytes32 id) = _premiumSwap(bytes32(uint256(10)));
+        vm.warp(t0 + bound(ackAt, 0, v3.LOCK_IN() - 1));
+        (uint8 v, bytes32 r, bytes32 ss) = vm.sign(M1_BOB, v3.ackDigest(id, M1_SINK));
+        v3.ackLocked(s, M1_SINK, v, r, ss);
+        vm.warp(t0 + v3.LOCK_IN() + bound(cancelAt, 0, D1 - v3.LOCK_IN() - 1));
+        vm.prank(taker);
+        v3.cancelIntent(s);
+        vm.prank(taker);
+        v3.refund(s, ALICE_S);
+        assertEq(M1_SINK.balance, 0.01 ether);
+    }
+
+    /// The window is a constant: shorter than the shortest t1 and the
+    /// shortest grace, so it always ends before t1 and the claimer's window.
+    function test_LockInBounds() public view {
+        assertGt(v3.LOCK_IN(), 0);
+        assertLt(v3.LOCK_IN(), v3.MIN_D1());
+        assertLe(v3.LOCK_IN(), v3.MIN_GRACE());
     }
 }

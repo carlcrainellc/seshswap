@@ -17,11 +17,25 @@ const (
 	StatusCancelling // cancel intent made; the claimer is frozen until Deadline
 )
 
+// LockIn is XmrSwapV3.LOCK_IN (seconds): after lock() the owner can't send
+// cancelIntent for this long, so the claimer can lock XMR and ack first.
+const LockIn = 20 * 60
+
 // State is XmrSwapV3.status(id).
 type State struct {
 	Stage     uint8
-	Deadline  uint64
+	Deadline  uint64 // CLAIMING/CANCELLING: end of the freeze; PENDING/READY: end of the lock-in
 	PremiumTo Address
+}
+
+// CancelFrom is the first chain time at which the owner may send
+// cancelIntent (the end of the lock-in window). 0 if not PENDING, or on a
+// deployment without a lock-in.
+func (s *State) CancelFrom() uint64 {
+	if s.Stage != StatusPending {
+		return 0
+	}
+	return s.Deadline
 }
 
 // Contract wraps an XmrSwapV3 deployment.

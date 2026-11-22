@@ -61,6 +61,11 @@ the cap and penalty checks.
   CLAIMED or REFUNDED, and the taker did not cancel before the deadline,
   anyone can call `slash(swapId)`. The penalty goes to the taker. The wallet
   does this itself, before it refunds.
+- XmrSwapV3 refuses a cancel for the first 20 minutes after the lock (its
+  lock-in window). With the default attest window (10 minutes) any cancel
+  therefore comes after the deadline, so a real no-show stays slashable.
+  With a longer window (up to 30 minutes) a taker who cancels before the
+  deadline cannot slash; one who waits for the deadline still can.
 - Each signed commitment can be recorded once, for one swap.
 - After an ack, or once the V3 swap is READY or CLAIMED, `release` frees the
   reservation.

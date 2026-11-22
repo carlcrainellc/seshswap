@@ -18,9 +18,10 @@ Files
   with a re-entering payout contract.
 - `Stateless.fuzz.t.sol`: input fuzzing of each entry point, exact time boundaries.
 - `Halmos.t.sol`: symbolic checks of owner checks and time boundaries.
-- `PoC.t.sol`: proofs of the findings below. These pass while the bug exists.
+- `PoC.t.sol`: the findings below, now regression tests (they fail if the bug comes back).
 
-Findings (H-1 and H-2 fixed on branch security/contract-fixes; M-1 and L-1 open)
+Findings (H-1, H-2 fixed on security/contract-fixes; L-1 fixed in swapd on
+security/go-fuzz; M-1 fixed with a lock-in window on security/m1-lockin)
 - H-1 `test_PoC_H1_CommitmentReplayAcrossSalts`: one signed maker Commitment can
   be recorded against many V3 swaps (it does not bind the swap id). The taker
   slashes every extra one. SeshRegistry.sol `commit` (452-485), Commitment struct (65-79).
@@ -28,7 +29,9 @@ Findings (H-1 and H-2 fixed on branch security/contract-fixes; M-1 and L-1 open)
   block, so the maker never locks XMR and never acks, then slashes. `slash`
   (515-528) allows CANCELLING / REFUNDED. Drains the bond down to the minimum.
 - M-1 `test_PoC_M1_AckFrontRunKeepsPremium`: the taker front-runs `ackLocked`
-  with `cancelIntent` and keeps the premium. XmrSwapV3.sol 242-252, 282-292.
+  with `cancelIntent` and keeps the premium. Fix: no `cancelIntent` for
+  `LOCK_IN` (20 min) after the lock. Boundary fuzz `testFuzz_M1_*`,
+  `invariant_LockInProtectsAck`, Halmos `check_cancelOnlyAfterLockIn`.
 - L-1 `test_ExitPay_zeroRefundToIsUndeployable`: money sent to an ExitPay address
   with refundTo = 0 (or hours/maxCost = 0) is stuck for good. ExitPay.sol 202-214.
 

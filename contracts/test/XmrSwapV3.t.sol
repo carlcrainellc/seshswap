@@ -24,6 +24,12 @@ contract XmrSwapV3Test is Test {
     uint256 constant T0 = 1_000_000;
     uint256 constant P = 0.003 ether;  // premium
 
+    /// Warp past the V3 lock-in window (cancelIntent is refused before it).
+    function _li(XmrSwapV3 k, XmrSwapV3.Swap memory s) internal {
+        (, uint64 d,) = k.status(k.swapId(s));
+        if (block.timestamp < d) vm.warp(d);
+    }
+
     function setUp() public {
         c = new XmrSwapV3();
         bob = vm.addr(bobPk);
@@ -73,7 +79,7 @@ contract XmrSwapV3Test is Test {
         emit XmrSwapV3.Locked(c.swapId(s), s);
         (, bytes32 id) = lockEth();
         assertEq(stage(id), 1);
-        assertEq(deadline(id), 0);
+        assertEq(deadline(id), T0 + c.LOCK_IN()); // lock-in window end
         assertEq(premiumTo(id), address(0));
         assertEq(address(c).balance, 1 ether);
     }
@@ -273,8 +279,9 @@ contract XmrSwapV3Test is Test {
         vm.prank(alice);
         vm.expectRevert(XmrSwapV3.WrongTime.selector); // no one-step early refund any more
         c.refund(s, ALICE_S);
+        _li(c, s);
         vm.expectEmit(true, false, false, true);
-        emit XmrSwapV3.CancelIntent(id, uint64(T0) + G);
+        emit XmrSwapV3.CancelIntent(id, uint64(T0) + c.LOCK_IN() + G);
         vm.prank(alice);
         c.cancelIntent(s);
         assertEq(stage(id), 6);
@@ -288,23 +295,28 @@ contract XmrSwapV3Test is Test {
 
     function test_CancelIntentRules() public {
         (XmrSwapV3.Swap memory s,) = lockEth();
+        _li(c, s);
         vm.prank(bob);
         vm.expectRevert(XmrSwapV3.NotAllowed.selector);
         c.cancelIntent(s);
         uint256 snap = vm.snapshotState();
         vm.warp(s.t1);
+        _li(c, s);
         vm.prank(alice);
         vm.expectRevert(XmrSwapV3.WrongTime.selector);
         c.cancelIntent(s);
         vm.revertToState(snap);
         vm.prank(alice);
         c.setReady(s);
+        _li(c, s);
         vm.prank(alice);
         vm.expectRevert(XmrSwapV3.WrongStatus.selector); // READY: she already accepted
         c.cancelIntent(s);
         (XmrSwapV3.Swap memory s2,) = lockEthP(0, bytes32(uint256(2)));
         vm.startPrank(alice);
+        _li(c, s2);
         c.cancelIntent(s2);
+        _li(c, s2);
         vm.expectRevert(XmrSwapV3.WrongStatus.selector); // only once
         c.cancelIntent(s2);
         vm.expectRevert(XmrSwapV3.WrongStatus.selector); // and no setReady after it
@@ -320,6 +332,7 @@ contract XmrSwapV3Test is Test {
         vm.prank(alice);
         bytes32 id = c.lock{value: 1 ether}(bob, BOB_K, ALICE_K, D1, 10 hours, 30 minutes, address(0), 1 ether, 0, bytes32(uint256(3)));
         vm.warp(s.t1 - 10 minutes);
+        _li(c, s);
         vm.prank(alice);
         c.cancelIntent(s);
         uint64 d = deadline(id); // t1 + 20 min
@@ -341,14 +354,15 @@ contract XmrSwapV3Test is Test {
     }
 
     function test_ExpiredCancelBeforeT1FreezesBothUntilT1() public {
-        // short grace: cancel at T0, deadline T0+30min < t1 = T0+1h
+        // short grace: cancel at T0+LOCK_IN (20 min), deadline T0+50min < t1 = T0+1h
         XmrSwapV3.Swap memory s = XmrSwapV3.Swap(alice, bob, BOB_K, ALICE_K, uint64(T0) + D1,
             uint64(T0) + D1 + D2, 30 minutes, address(0), 1 ether, 0, bytes32(uint256(4)));
         vm.prank(alice);
         bytes32 id = c.lock{value: 1 ether}(bob, BOB_K, ALICE_K, D1, D2, 30 minutes, address(0), 1 ether, 0, bytes32(uint256(4)));
+        _li(c, s);
         vm.prank(alice);
         c.cancelIntent(s);
-        vm.warp(T0 + 45 minutes);
+        vm.warp(T0 + 55 minutes);
         vm.prank(alice);
         vm.expectRevert(XmrSwapV3.WrongTime.selector);
         c.refund(s, ALICE_S);
@@ -436,7 +450,7 @@ contract XmrSwapV3Test is Test {
     /// owner's refund works at every second before it.
     function testFuzz_CancelIntentFreeze(uint256 dtIntent, uint256 dtProbe) public {
         (XmrSwapV3.Swap memory s, bytes32 id) = lockEth();
-        vm.warp(T0 + bound(dtIntent, 0, D1 - 1));
+        vm.warp(T0 + bound(dtIntent, c.LOCK_IN(), D1 - 1));
         uint256 tIntent = block.timestamp;
         vm.prank(alice);
         c.cancelIntent(s);
@@ -492,6 +506,7 @@ contract XmrSwapV3Test is Test {
     function test_BadRefundSecretRejected() public {
         (XmrSwapV3.Swap memory s,) = lockEth();
         vm.startPrank(alice);
+        _li(c, s);
         c.cancelIntent(s);
         vm.expectRevert(XmrSwapV3.BadSecret.selector);
         c.refund(s, BOB_S);
@@ -606,6 +621,7 @@ contract XmrSwapV3Test is Test {
         c.ackLocked(s0, sink, v, r, ss);
         (XmrSwapV3.Swap memory s, bytes32 id) = lockEthP(P, bytes32(uint256(2)));
         (v, r, ss) = vm.sign(bobPk, c.ackDigest(id, sink));
+        _li(c, s);
         vm.prank(alice);
         c.cancelIntent(s); // the owner cancelled first (e.g. front-ran the ack): no ack possible
         vm.expectRevert(XmrSwapV3.WrongStatus.selector);
@@ -620,6 +636,7 @@ contract XmrSwapV3Test is Test {
         assertEq(address(c).balance, 1 ether + P);
         ack(s, id, sink);
         vm.startPrank(alice);
+        _li(c, s);
         c.cancelIntent(s);
         vm.expectEmit(true, false, false, true);
         emit XmrSwapV3.PremiumPaid(id, sink, P);
@@ -633,6 +650,7 @@ contract XmrSwapV3Test is Test {
     function test_CancelAfterAckForfeitsEvenWhenRefundedAfterT2() public {
         (XmrSwapV3.Swap memory s, bytes32 id) = lockEthP(P, bytes32(uint256(1)));
         ack(s, id, sink);
+        _li(c, s);
         vm.prank(alice);
         c.cancelIntent(s);
         vm.warp(T0 + G + 1 days); // waiting out the freeze does not dodge the premium
@@ -644,6 +662,7 @@ contract XmrSwapV3Test is Test {
     function test_CancelWithoutAckReturnsPremium() public {
         (XmrSwapV3.Swap memory s,) = lockEthP(P, bytes32(uint256(1)));
         vm.startPrank(alice);
+        _li(c, s);
         c.cancelIntent(s);
         c.refund(s, ALICE_S);
         vm.stopPrank();
@@ -680,6 +699,7 @@ contract XmrSwapV3Test is Test {
         address rej = address(new RejectEth());
         ack(s, id, rej);
         vm.startPrank(alice);
+        _li(c, s);
         c.cancelIntent(s);
         c.refund(s, ALICE_S); // must not revert
         vm.stopPrank();
@@ -704,12 +724,14 @@ contract XmrSwapV3Test is Test {
 
     function test_ReentrancyFromPremiumRecipientBlocked() public {
         (XmrSwapV3.Swap memory s2,) = lockEthP(P, bytes32(uint256(2)));
+        _li(c, s2);
         vm.prank(alice);
         c.cancelIntent(s2);
         PremiumReenter pr = new PremiumReenter(c, s2);
         (XmrSwapV3.Swap memory s, bytes32 id) = lockEthP(P, bytes32(uint256(1)));
         ack(s, id, address(pr));
         vm.startPrank(alice);
+        _li(c, s);
         c.cancelIntent(s);
         c.refund(s, ALICE_S);
         vm.stopPrank();
@@ -791,6 +813,7 @@ contract XmrSwapV3Test is Test {
 
     function cancelAndRefund(XmrSwapV3.Swap memory s) internal {
         vm.startPrank(alice);
+        _li(c, s);
         c.cancelIntent(s);
         c.refund(s, ALICE_S);
         vm.stopPrank();
@@ -904,6 +927,7 @@ contract XmrSwapV3Test is Test {
         XmrSwapV3.Swap memory s2 = _swap(address(t), 500, 0, bytes32(uint256(8)));
         vm.prank(alice);
         c.lock(bob, BOB_K, ALICE_K, D1, D2, G, address(t), 500, 0, bytes32(uint256(8)));
+        _li(c, s2);
         vm.prank(alice);
         c.cancelIntent(s2);
         t.arm(address(c), abi.encodeCall(XmrSwapV3.refund, (s2, ALICE_S)));
@@ -919,6 +943,8 @@ contract XmrSwapV3Test is Test {
         ReentrantOwnerV3 o = new ReentrantOwnerV3(c);
         vm.deal(address(o), 2 ether);
         (XmrSwapV3.Swap memory s1, XmrSwapV3.Swap memory s2) = o.setup(BOB_K, ALICE_K, bob);
+        _li(c, s1);
+        o.cancelBoth(s1, s2);
         o.go(s1, s2, ALICE_S);
         assertTrue(o.attempted());
         assertEq(o.reentryError(), XmrSwapV3.Reentrancy.selector);
@@ -930,6 +956,8 @@ contract XmrSwapV3Test is Test {
         o.useSetReady();
         vm.deal(address(o), 2 ether);
         (XmrSwapV3.Swap memory s1, XmrSwapV3.Swap memory s2) = o.setup(BOB_K, ALICE_K, bob);
+        _li(c, s1);
+        o.cancelBoth(s1, s2);
         o.go(s1, s2, ALICE_S);
         assertTrue(o.attempted());
         assertEq(o.reentryError(), XmrSwapV3.Reentrancy.selector);
@@ -962,6 +990,7 @@ contract XmrSwapV3Test is Test {
         c.claimRelayed(s, BOB_S, bob, address(0), 1e15, v, r, ss);
         emit log_named_uint("claimRelayed (ETH, premium back)", g - gasleft());
         (XmrSwapV3.Swap memory s2,) = lockEthP(0, bytes32(uint256(2)));
+        _li(c, s2);
         vm.prank(alice);
         g = gasleft();
         c.cancelIntent(s2);
@@ -990,6 +1019,8 @@ contract ReentrantOwnerV3 {
         c.lock{value: 1 ether}(bob, bk, ak, 1 hours, 2 hours, 6 hours, address(0), 1 ether, 0, bytes32(uint256(2)));
         s1 = XmrSwapV3.Swap(address(this), bob, bk, ak, t1, t1 + 2 hours, 6 hours, address(0), 1 ether, 0, bytes32(uint256(1)));
         s2 = XmrSwapV3.Swap(address(this), bob, bk, ak, t1, t1 + 2 hours, 6 hours, address(0), 1 ether, 0, bytes32(uint256(2)));
+    }
+    function cancelBoth(XmrSwapV3.Swap calldata s1, XmrSwapV3.Swap calldata s2) external {
         c.cancelIntent(s1);
         if (!trySetReady) c.cancelIntent(s2);
     }
