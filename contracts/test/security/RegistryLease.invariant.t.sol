@@ -16,16 +16,21 @@ contract Reenterer {
     SeshRegistry public reg;
     ExitLease public el;
     uint256 public id;
-    bool public reentered;
+    bool public reentered;      // re-entered the registry from inside a registry payout
+    bool public leaseReentered; // re-entered ExitLease.buy from inside its own payout
+    bool internal _inReg;
     constructor(SeshRegistry r, ExitLease e) { reg = r; el = e; }
     function setId(uint256 i) external { id = i; }
     function challengeOn(uint256 i) external payable { reg.challenge{value: msg.value}(i); }
     receive() external payable {
         // Every attempt must fail; a success is recorded.
-        try reg.withdrawOwed(address(this)) { reentered = true; } catch {}
-        try reg.resolveChallenge(id) { reentered = true; } catch {}
-        try reg.sweepRemoved(id) { reentered = true; } catch {}
-        try el.buy{value: 0}(id, address(0), 1, 0, "") { reentered = true; } catch {}
+        // From a lease payout the registry is not locked, so a resolve may legitimately
+        // succeed there; only calls made while the registry pays us must fail.
+        bool fromReg = msg.sender == address(reg);
+        try reg.withdrawOwed(address(this)) { if (fromReg) reentered = true; } catch {}
+        try reg.resolveChallenge(id) { if (fromReg) reentered = true; } catch {}
+        try reg.sweepRemoved(id) { if (fromReg) reentered = true; } catch {}
+        try el.buy{value: 0}(id, address(0), 1, 0, "") { leaseReentered = true; } catch {}
     }
 }
 
@@ -334,7 +339,10 @@ contract RegLeaseHandler is Test {
             nLeases++;
             if (inf.status != SeshRegistry.Status.ACTIVE || inf.tag != bytes32("exit")) leaseOnDeadListing = true;
             uint256 pb1 = useUsdc ? usdc.balanceOf(payout) : payout.balance;
-            if (pb1 - pb0 != q) leaseWrongPay = true;
+            // The re-entering payout can collect other registry money inside its callback
+            // (withdrawOwed, resolveChallenge), so for it only a lower bound holds.
+            if (payout == address(reenter)) { if (pb1 - pb0 < q) leaseWrongPay = true; }
+            else if (pb1 - pb0 != q) leaseWrongPay = true;
             uint64 until1 = el.paidUntil(lid, keccak256(bytes(BSESH)));
             uint64 base = until0 > block.timestamp ? until0 : uint64(block.timestamp);
             if (until1 != base + uint64(h) * 1 hours) leaseWrongPay = true;
@@ -345,6 +353,14 @@ contract RegLeaseHandler is Test {
     function sumBonds() external view returns (uint256 s) {
         uint256 n = reg.listingCount();
         for (uint256 i = 1; i <= n; i++) s += reg.listing(i).bond;
+    }
+
+    function openChallenges() external view returns (uint256 n) {
+        uint256 m = reg.listingCount();
+        for (uint256 i = 1; i <= m; i++) {
+            SeshRegistry.Listing memory l = reg.listing(i);
+            if (l.challenger != address(0) && (l.status == SeshRegistry.Status.ACTIVE || l.status == SeshRegistry.Status.EXITING)) n++;
+        }
     }
 
     function sumOwed() external view returns (uint256 s) {
@@ -389,7 +405,13 @@ contract RegistryLeaseInvariants is SecBase {
 
     /// Registry holds exactly: every bond + every deferred payout + open challenge bonds.
     function invariant_RegistrySolvency() public view {
-        assertEq(address(reg).balance, h.sumBonds() + h.sumOwed() + h.ghostChallenges() * reg.challengeBond());
+        assertEq(address(reg).balance, h.sumBonds() + h.sumOwed() + h.openChallenges() * reg.challengeBond());
+    }
+
+    /// No payout callback can re-enter the registry or ExitLease.buy.
+    function invariant_NoReentry() public view {
+        assertTrue(!h.reenter().reentered());
+        assertTrue(!h.reenter().leaseReentered());
     }
 
     /// ExitLease never holds funds.

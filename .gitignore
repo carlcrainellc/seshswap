@@ -14,3 +14,7 @@ contracts/foundry.lock
 dist/release/
 swapd/cmd/seshswap-setup/payload/
 fuzz-stats/
+out-long/
+cache-long/
+crytic-export/
+slither_results.json

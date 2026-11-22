@@ -316,13 +316,14 @@ contract V3TokenHandler is Test {
         try oc.pull(asset, address(0xF2E5)) {} catch {}
     }
 
-    /// Eve tries to pull someone else's owed balance.
+    /// Eve pulls: she may only ever get what she is owed (relayer fees), never anyone else's.
     function eveWithdraw(uint256 a) external {
         address asset = assets[a % assets.length];
         uint256 before = _bal(asset, eve);
+        uint256 owedEve = c.owed(asset, eve); // only relayer fees she earned
         vm.prank(eve);
         try c.withdraw(asset, eve) {
-            if (_bal(asset, eve) > before) stolen = true; // Eve is never owed anything
+            if (_bal(asset, eve) - before != owedEve) stolen = true;
         } catch {}
     }
 
