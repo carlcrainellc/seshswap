@@ -16,7 +16,7 @@ func TestDefaultIsArbitrumSepolia(t *testing.T) {
 	if ch.XMRUSDNote == "" {
 		t.Fatal("should say the XMR/USD feed is a mock")
 	}
-	if ch.Contract != "0x1F3e5b5d9C7bE3a95535Bac1e68864B1d10A46F4" || ch.USDC == "" || ch.XMRUSDFeed == "" {
+	if ch.Contract != "0xf296e5b6f2268b700782FeCD3Da5b1Fd69CfceE3" || ch.USDC == "" || ch.XMRUSDFeed == "" {
 		t.Fatalf("arb deploy addrs missing: %+v", ch)
 	}
 }

@@ -79,23 +79,24 @@ func builtins() map[string]Chain {
 			Explorer: "https://sepolia.arbiscan.io",
 			EthRPC:   "https://sepolia-rollup.arbitrum.io/rpc",
 			EthRPCs:  []string{"https://arbitrum-sepolia-rpc.publicnode.com"},
-			// Deployed 13 Nov 2026 (CT). Official Chainlink ETH/USD exists
+			// XmrSwapV3 redeployed 22 Nov 2026 (CT) with the fuzzing fixes
+			// (verified on Sourcify). Official Chainlink ETH/USD exists
 			// on this chain. There is no official Chainlink XMR/USD (the
 			// Arbitrum Sepolia feed list 404s); XMRUSDFeed is a mock AggregatorV3.
-			Contract:     "0x1F3e5b5d9C7bE3a95535Bac1e68864B1d10A46F4",
+			Contract:     "0xf296e5b6f2268b700782FeCD3Da5b1Fd69CfceE3",
 			USDC:         "0x91280FA5450d481569C5fEBFdeF4E794C00cBCfa",
 			XMRUSDFeed:   "0xaeF4c8ae583e245323e3C72dea975B0d81FEBc8b",
 			ETHUSDFeed:   "0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165",
 			USDCDecimals: 6,
 			FairMaxBps:   DefaultFairMaxBps,
 			XMRUSDNote:   "a mock XMR/USD feed (no official Chainlink XMR/USD on Arbitrum Sepolia)",
-			// SeshRegistry, deployed 15 Nov 2026 (CT) with the placeholder
-			// testnet parameters in docs/REGISTRY.md.
-			Registry:          "0xc3576aefa11cef4e7758dacfa9e58560eca148d8",
-			RegistryFromBlock: 329381312,
-			// ExitLease, deployed 15 Nov 2026 (CT), verified on Sourcify.
-			ExitLease:          "0x145049b20f382Ca9D0B281a986dc02DEb653e65c",
-			ExitLeaseFromBlock: 329627329,
+			// SeshRegistry, redeployed 22 Nov 2026 (CT) for the new XmrSwapV3,
+			// with the placeholder testnet parameters in docs/REGISTRY.md.
+			Registry:          "0x6Ca637f1830A1c6bc817A7c60a11481735dfdF10",
+			RegistryFromBlock: 331614951,
+			// ExitLease, redeployed 22 Nov 2026 (CT) for the new registry.
+			ExitLease:          "0x632b967b416F2075f8C21385B325891eaf3Ae50D",
+			ExitLeaseFromBlock: 331614993,
 		},
 	}
 }

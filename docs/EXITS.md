@@ -3,10 +3,10 @@
 Rent a Session Router exit by the hour from the wallet. Testnet only
 (Arbitrum Sepolia).
 
-- `ExitLease`: `0x145049b20f382Ca9D0B281a986dc02DEb653e65c`
-- `SeshRegistry`: `0xc3576aefa11cef4e7758dacfa9e58560eca148d8` (tag `exit`)
+- `ExitLease`: `0x632b967b416F2075f8C21385B325891eaf3Ae50D`
+- `SeshRegistry`: `0x6Ca637f1830A1c6bc817A7c60a11481735dfdF10` (tag `exit`)
 - `MockUSDC`: `0x91280FA5450d481569C5fEBFdeF4E794C00cBCfa`
-- `ExitPay`: `0xE622AF84dcC1f976f14E143287e68587CC8F24A6`
+- `ExitPay`: `0xbD9AdBa043B86F62C1c9c984FD604E8104E4C50B`
 
 Connecting installs a default route through the tunnel. The exit carries web
 traffic (TCP 80 and 443, new connections rate-limited at 50/s burst 100 per
@@ -80,8 +80,8 @@ A maker can have its swap claims buy exit time. Add to the maker config:
 
 ```json
 "exitPay": {
-  "factory": "0xE622AF84dcC1f976f14E143287e68587CC8F24A6",
-  "listingId": 4,
+  "factory": "0xbD9AdBa043B86F62C1c9c984FD604E8104E4C50B",
+  "listingId": 3,
   "hours": 24,
   "maxCost": 600000000000000,
   "buyerSesh": "<your router>.sesh"
