@@ -16,3 +16,24 @@ runs = 2000
 runs = 256
 depth = 64
 fail_on_revert = false
+
+# Security suite (test/security): long runs, per-run stats appended to fuzz-stats/.
+#   FOUNDRY_PROFILE=security forge test --match-path 'test/security/*'
+[profile.security]
+src = "src"
+test = "test"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 10000
+fs_permissions = [{ access = "read-write", path = "./fuzz-stats" }]
+
+[profile.security.fuzz]
+runs = 10000
+
+[profile.security.invariant]
+runs = 1000
+depth = 128
+fail_on_revert = false
