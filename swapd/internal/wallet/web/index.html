@@ -451,7 +451,7 @@ function progress() {
       ${s.registry ? `<div class="a" data-testid="registry-line">${esc(s.registry.text)}
         ${s.registry.commitTx ? `<div class="mono">Commitment: <a href="${explorerTx(s.registry.commitTx)}" target="_blank">${esc(short(s.registry.commitTx))}</a></div>` : ""}
         ${s.registry.slashTx ? `<div class="mono">Penalty: <a href="${explorerTx(s.registry.slashTx)}" target="_blank">${esc(short(s.registry.slashTx))}</a></div>` : ""}</div>` : ""}
-      ${s.log && s.log.length ? `<details><summary>Technical log</summary><pre class="mono" style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(s.log.join("\\n"))}</pre></details>` : ""}
+      ${s.log && s.log.length ? `<details id="techlog"${state.techLogOpen ? " open" : ""}><summary>Technical log</summary><pre class="mono" style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(s.log.join("\\n"))}</pre></details>` : ""}
     </div>
   `, {nav:"progress"});
 }
@@ -701,6 +701,8 @@ function render() {
   const el = $("#app");
   const fn = screens[state.screen] || welcome;
   el.innerHTML = fn();
+  const tl = $("#techlog");
+  if (tl) tl.addEventListener("toggle", () => { state.techLogOpen = tl.open; });
   const wrote = $("#wrote");
   if (wrote) wrote.addEventListener("change", () => { const c=$("#cont"); if(c) c.disabled = !wrote.checked; });
   el.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => go(b.dataset.go, b.dataset.id)));
