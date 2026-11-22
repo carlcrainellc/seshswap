@@ -47,19 +47,21 @@ func freePort(t *testing.T) int {
 }
 
 type Env struct {
-	t         *testing.T
-	ctx       context.Context
-	work      string
-	eth       *eth.Client
-	k         *eth.Contract
-	daemon    *xmr.Daemon
-	walletM   *xmr.Wallet // maker's wallet-rpc
-	walletT   *xmr.Wallet // taker's wallet-rpc
-	relayURL  string
-	minerAddr string
-	procs     []*exec.Cmd
-	token     eth.Address
-	relaySrv  *relay.Server
+	t          *testing.T
+	ctx        context.Context
+	work       string
+	eth        *eth.Client
+	k          *eth.Contract
+	daemon     *xmr.Daemon
+	walletM    *xmr.Wallet // maker's wallet-rpc
+	walletT    *xmr.Wallet // taker's wallet-rpc
+	relayURL   string
+	minerAddr  string
+	procs      []*exec.Cmd
+	token      eth.Address
+	relaySrv   *relay.Server
+	walletMURL string // maker wallet-rpc base URL (hostile tests)
+	walletTURL string // taker wallet-rpc base URL (hostile tests)
 }
 
 func (e *Env) start(name string, args ...string) {
@@ -153,6 +155,8 @@ func NewEnv(t *testing.T) *Env {
 	e.eth = eth.NewClient(fmt.Sprintf("http://127.0.0.1:%d", ap))
 	e.daemon = xmr.NewDaemon(fmt.Sprintf("http://127.0.0.1:%d", dp))
 	e.walletM = xmr.NewWallet(fmt.Sprintf("http://127.0.0.1:%d", mp), passphrase)
+	e.walletMURL = fmt.Sprintf("http://127.0.0.1:%d", mp)
+	e.walletTURL = fmt.Sprintf("http://127.0.0.1:%d", tp)
 	e.walletT = xmr.NewWallet(fmt.Sprintf("http://127.0.0.1:%d", tp), passphrase)
 	waitFor(t, "anvil", func() error { _, err := e.eth.ChainID(e.ctx); return err })
 	waitFor(t, "monerod", func() error { _, err := e.daemon.Height(e.ctx); return err })
