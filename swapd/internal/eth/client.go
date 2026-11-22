@@ -400,6 +400,16 @@ func (c *Client) Nonce(ctx context.Context, a Address) (uint64, error) {
 	return n.Uint64(), nil
 }
 
+// MinedNonce is the account's transaction count in the latest block: every
+// nonce below it is mined.
+func (c *Client) MinedNonce(ctx context.Context, a Address) (uint64, error) {
+	n, err := c.bigCall(ctx, "eth_getTransactionCount", a.Hex(), "latest")
+	if err != nil {
+		return 0, err
+	}
+	return n.Uint64(), nil
+}
+
 type Head struct {
 	Number    uint64
 	Timestamp uint64

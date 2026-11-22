@@ -1066,7 +1066,47 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// attachNet does attach's node calls without s.mu. cid == nil (and no
+// error) means: carry on without swaps for now (already logged). xw is the
+// Monero wallet for the engine; xmrOK says our wallet file opened in it.
+func (s *Server) attachNet(c *eth.Client, v *Vault, password string) (cid *big.Int, xw *xmr.Wallet, xmrOK bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	cid, err = c.ChainID(ctx)
+	cancel()
+	if err != nil {
+		s.logf("ethereum RPC not reachable yet: %v", err)
+		return nil, nil, false, nil
+	}
+	if name, ok := mainnets[cid.Int64()]; ok && !s.Cfg.AllowMainnet {
+		return nil, nil, false, fmt.Errorf("refusing to run on %s mainnet: this software is unaudited", name)
+	}
+	if s.Cfg.ChainID != 0 && cid.Int64() != s.Cfg.ChainID {
+		return nil, nil, false, fmt.Errorf("RPC chain id %d does not match configured %d (%s)", cid.Int64(), s.Cfg.ChainID, s.Cfg.Chain)
+	}
+	if s.Cfg.XmrNet == keys.Mainnet && !s.Cfg.AllowMainnet {
+		return nil, nil, false, errors.New("refusing Monero mainnet: this software is unaudited")
+	}
+	if s.Cfg.XmrWalletRPC == "" && !s.Cfg.Demo {
+		s.logf("no Monero wallet-rpc; ETH balances will work, swaps will not")
+		return nil, nil, false, nil
+	}
+	if s.Cfg.XmrWalletRPC == "" {
+		return cid, nil, false, nil
+	}
+	xw = xmr.NewWallet(s.Cfg.XmrWalletRPC, password)
+	ctx, cancel = context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rh := s.restoreHeight(ctx)
+	if err := xw.FromKeys(ctx, s.Cfg.MainWallet, v.Keys.XmrAddr, v.Keys.XmrView.Hex(), v.Keys.XmrSpend.Hex(), rh); err != nil {
+		s.logf("monero wallet from keys: %v (swaps need this)", err)
+		// Still start the engine if we can; sweep/balance may fail.
+		return cid, xw, false, nil
+	}
+	return cid, xw, true, nil
+}
+
 // attach is called with s.mu held, after a successful Create or OpenVault.
+// It releases s.mu during node calls and holds it again when it returns.
 func (s *Server) attach(v *Vault, password string) error {
 	if s.cancel != nil {
 		s.cancel()
@@ -1088,42 +1128,24 @@ func (s *Server) attach(v *Vault, password string) error {
 	if len(urls) > 0 {
 		c := eth.NewClients(urls...)
 		c.HTTP = newChainHTTP()
+		// The node calls below can take up to 75 s on a bad link; don't
+		// hold s.mu across them, so status and the other handlers answer.
+		s.mu.Unlock()
+		cid, xw, xmrOK, err := s.attachNet(c, v, password)
+		s.mu.Lock()
+		if s.vault != v {
+			return errors.New("the wallet was locked while it was connecting")
+		}
 		s.eth = c
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		cid, err := c.ChainID(ctx)
-		cancel()
 		if err != nil {
-			s.logf("ethereum RPC not reachable yet: %v", err)
-			return nil
-		}
-		if name, ok := mainnets[cid.Int64()]; ok && !s.Cfg.AllowMainnet {
 			s.eth = nil
-			return fmt.Errorf("refusing to run on %s mainnet: this software is unaudited", name)
+			return err
 		}
-		if s.Cfg.ChainID != 0 && cid.Int64() != s.Cfg.ChainID {
-			s.eth = nil
-			return fmt.Errorf("RPC chain id %d does not match configured %d (%s)", cid.Int64(), s.Cfg.ChainID, s.Cfg.Chain)
+		if cid == nil {
+			return nil // RPC not reachable yet, or no Monero wallet-rpc (logged)
 		}
-		if s.Cfg.XmrNet == keys.Mainnet && !s.Cfg.AllowMainnet {
-			return errors.New("refusing Monero mainnet: this software is unaudited")
-		}
-		if s.Cfg.XmrWalletRPC == "" && !s.Cfg.Demo {
-			s.logf("no Monero wallet-rpc; ETH balances will work, swaps will not")
-			return nil
-		}
-		var xw *xmr.Wallet
-		if s.Cfg.XmrWalletRPC != "" {
-			xw = xmr.NewWallet(s.Cfg.XmrWalletRPC, password)
-			ctx, cancel = context.WithTimeout(context.Background(), 60*time.Second)
-			rh := s.restoreHeight(ctx)
-			err := xw.FromKeys(ctx, s.Cfg.MainWallet, v.Keys.XmrAddr, v.Keys.XmrView.Hex(), v.Keys.XmrSpend.Hex(), rh)
-			cancel()
-			if err != nil {
-				s.logf("monero wallet from keys: %v (swaps need this)", err)
-				// Still start the engine if we can; sweep/balance may fail.
-			} else {
-				s.xmrW = xw
-			}
+		if xmrOK {
+			s.xmrW = xw
 		}
 		pol := swap.DefaultPolicy()
 		if s.Cfg.Policy != nil {

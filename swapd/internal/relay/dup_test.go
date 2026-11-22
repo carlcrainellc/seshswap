@@ -17,7 +17,9 @@ import (
 // fakeChain answers what Submit/SubmitIntent need. eth_call always succeeds
 // (the earlier tx is not mined yet, so "latest" still lets it pass) and
 // every eth_sendRawTransaction is counted.
-func fakeChain(t *testing.T, sent *atomic.Int32) *eth.Client {
+func fakeChain(t *testing.T, sent *atomic.Int32) *eth.Client { return fakeChainFail(t, sent, nil) }
+
+func fakeChainFail(t *testing.T, sent *atomic.Int32, failSend *atomic.Bool) *eth.Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     any    `json:"id"`
@@ -39,6 +41,10 @@ func fakeChain(t *testing.T, sent *atomic.Int32) *eth.Client {
 		case "eth_getBlockByNumber":
 			res = map[string]string{"number": "0x10", "timestamp": "0x6553f100", "baseFeePerGas": "0x5f5e100"}
 		case "eth_sendRawTransaction":
+			if failSend != nil && failSend.Swap(false) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32000, "message": "node hiccup"}})
+				return
+			}
 			n := sent.Add(1)
 			res = fmt.Sprintf("0x%064x", n)
 		default:
@@ -80,5 +86,28 @@ func TestRelayDuplicateIntentSentOnce(t *testing.T) {
 	wg.Wait()
 	if n := sent.Load(); n != 1 {
 		t.Fatalf("DUPLICATE RELAY: one ack was broadcast %d times (the copies revert and burn the relayer's gas)", n)
+	}
+}
+
+// A submission that failed to broadcast can be sent again; a repeat after
+// success gets the first hash back.
+func TestRelayRetryAfterFailure(t *testing.T) {
+	var sent atomic.Int32
+	var fail atomic.Bool
+	fail.Store(true)
+	key, _ := eth.NewKey()
+	k := &eth.Contract{C: fakeChainFail(t, &sent, &fail), Addr: eth.Address{0xf2, 0x96}, ChainID: big.NewInt(421614)}
+	s := &Server{K: k, Key: key}
+	in := signedAck(t, k)
+	if _, err := s.SubmitIntent(context.Background(), in); err == nil {
+		t.Fatal("first submit should fail")
+	}
+	h1, err := s.SubmitIntent(context.Background(), in)
+	if err != nil || sent.Load() != 1 {
+		t.Fatalf("retry: %v, sent %d", err, sent.Load())
+	}
+	h2, err := s.SubmitIntent(context.Background(), in)
+	if err != nil || h2 != h1 || sent.Load() != 1 {
+		t.Fatalf("repeat: %v %s %s, sent %d", err, h1.Hex(), h2.Hex(), sent.Load())
 	}
 }

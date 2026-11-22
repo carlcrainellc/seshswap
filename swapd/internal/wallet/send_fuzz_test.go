@@ -71,6 +71,7 @@ func (m *sendModel) step(op, arg byte) {
 		m.fe.mu.Lock()
 		m.fe.bal.Sub(m.fe.bal, m.outETH)
 		m.fe.usdc.Sub(m.fe.usdc, m.outUSDC)
+		m.fe.mined = len(m.fe.raws)
 		m.fe.mu.Unlock()
 		m.outETH.SetInt64(0)
 		m.outUSDC.SetInt64(0)

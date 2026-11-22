@@ -68,6 +68,9 @@ type fakeEth struct {
 	bal  *big.Int
 	usdc *big.Int
 	raws []string
+	url  string
+	// mined: how many of raws are mined (the "latest" nonce is 7+mined)
+	mined int
 }
 
 func (f *fakeEth) start(t *testing.T) *eth.Client {
@@ -97,6 +100,9 @@ func (f *fakeEth) start(t *testing.T) *eth.Client {
 			res = "0x0"
 		case "eth_getTransactionCount":
 			res = "0x7"
+			if len(req.Params) > 1 && req.Params[1] == "latest" {
+				res = fmt.Sprintf("0x%x", 7+f.mined)
+			}
 		case "eth_sendRawTransaction":
 			f.raws = append(f.raws, req.Params[0].(string))
 			res = "0x" + strings.Repeat("ab", 32)
@@ -104,6 +110,7 @@ func (f *fakeEth) start(t *testing.T) *eth.Client {
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": res})
 	}))
 	t.Cleanup(srv.Close)
+	f.url = srv.URL
 	return eth.NewClient(srv.URL)
 }
 
@@ -348,6 +355,9 @@ func TestSendEthAndUsdc(t *testing.T) {
 	if len(fe.raws) != 1 {
 		t.Fatalf("raw txs: %d", len(fe.raws))
 	}
+	fe.mu.Lock()
+	fe.mined = 1 // mined (the fake balance stays at 0.1 ETH)
+	fe.mu.Unlock()
 	// An unlocked taker swap holds 0.06 ETH: 0.05 more no longer fits.
 	addSwap(t, s, &swap.Record{ID: "bb00000000000000000000000000000b", Role: swap.Taker, Phase: swap.TNegotiated,
 		Value: big.NewInt(6e16), XMR: 1})
@@ -374,7 +384,8 @@ func TestSendEthAndUsdc(t *testing.T) {
 		t.Fatalf("usdc tx doesn't carry the transfer: %s", raw)
 	}
 	code, p = do(t, h, "POST", "/v1/wallet/send/prepare", jsonBody(map[string]any{"coin": "USDC", "to": to.Hex(), "amount": "51"}), "")
-	if code != 400 || !strings.Contains(fmt.Sprint(p["error"]), "only 50 USDC") {
+	// 12.5 of the 50 USDC is in a sent, not yet mined, transfer.
+	if code != 400 || !strings.Contains(fmt.Sprint(p["error"]), "only 37.5 USDC") {
 		t.Fatalf("usdc too much: %d %v", code, p)
 	}
 }

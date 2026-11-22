@@ -3,6 +3,7 @@ package swap
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -178,8 +179,48 @@ type Engine struct {
 	blockAt  time.Time
 	blockVal uint64
 
+	// StepTimeout bounds one swap step (ETH and Monero calls), so a stalled
+	// node link can't hold a swap forever. 0 = DefaultStepTimeout.
+	StepTimeout time.Duration
+
+	// mu guards the records map and the records in it. It is only held for
+	// short in-memory work, never across a network call, so status reads
+	// stay quick while a step waits on a slow node.
 	mu      sync.Mutex
 	records map[string]*Record
+	// wmu serializes writers (a step, Update) per record.
+	wmuMu sync.Mutex
+	wmu   map[string]*sync.Mutex
+}
+
+// DefaultStepTimeout is the longest one swap step may take.
+const DefaultStepTimeout = 5 * time.Minute
+
+func (e *Engine) writer(id string) *sync.Mutex {
+	e.wmuMu.Lock()
+	defer e.wmuMu.Unlock()
+	if e.wmu == nil {
+		e.wmu = map[string]*sync.Mutex{}
+	}
+	m := e.wmu[id]
+	if m == nil {
+		m = new(sync.Mutex)
+		e.wmu[id] = m
+	}
+	return m
+}
+
+// cloneRecord deep-copies a record the way the store keeps it.
+func cloneRecord(r *Record) (*Record, error) {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	c := new(Record)
+	if err := json.Unmarshal(b, c); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func (e *Engine) logf(r *Record, f string, a ...any) {
@@ -237,7 +278,11 @@ func (e *Engine) Add(r *Record) error {
 }
 
 // Update applies fn to a record under the engine lock and persists it.
+// It waits for a running step of the same swap (bounded by StepTimeout).
 func (e *Engine) Update(id string, fn func(r *Record) error) error {
+	w := e.writer(id)
+	w.Lock()
+	defer w.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	r, ok := e.records[id]
@@ -285,16 +330,48 @@ func (e *Engine) Run(ctx context.Context, every time.Duration) {
 
 func (e *Engine) StepAll(ctx context.Context) {
 	for _, id := range e.IDs() {
-		_ = e.Update(id, func(r *Record) error {
-			if r.Phase.Terminal() {
-				return nil
-			}
-			if err := e.safeStep(ctx, r); err != nil {
-				e.logf(r, "step error (will retry): %v", err)
-			}
-			return nil
-		})
+		if ctx.Err() != nil {
+			return
+		}
+		e.stepOne(ctx, id)
 	}
+}
+
+// stepOne steps a copy of the record without holding e.mu (the step makes
+// ETH and Monero calls), then puts the copy in place. Writers of the same
+// swap wait on its writer lock; readers see the record as it was.
+func (e *Engine) stepOne(ctx context.Context, id string) {
+	w := e.writer(id)
+	w.Lock()
+	defer w.Unlock()
+	e.mu.Lock()
+	cur, ok := e.records[id]
+	if !ok || cur.Phase.Terminal() {
+		e.mu.Unlock()
+		return
+	}
+	r, err := cloneRecord(cur)
+	e.mu.Unlock()
+	if err != nil {
+		e.logf(nil, "swap %s: %v", id, err)
+		return
+	}
+	d := e.StepTimeout
+	if d <= 0 {
+		d = DefaultStepTimeout
+	}
+	sctx, cancel := context.WithTimeout(ctx, d)
+	if err := e.safeStep(sctx, r); err != nil {
+		if sctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+			err = fmt.Errorf("step took longer than %s (node or wallet not answering): %w", d, err)
+		}
+		e.logf(r, "step error (will retry): %v", err)
+	}
+	cancel()
+	e.mu.Lock()
+	e.records[id] = r
+	e.mu.Unlock()
+	_ = e.Store.Put(r.name(), r)
 }
 
 // safeStep turns a panic in one swap's step into a logged error, so an

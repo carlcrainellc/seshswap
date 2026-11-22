@@ -46,6 +46,90 @@ type Server struct {
 	Refuse func(kind string, swapID eth.Hash) bool
 	Logf   func(string, ...any)
 	mu     sync.Mutex // serialize nonces
+
+	// recent: calldata we broadcast lately (or are broadcasting now). The
+	// same signed claim/intent/ack sent again before it is mined would pass
+	// the simulation and revert on chain at the relayer's cost; it gets the
+	// first tx hash back instead.
+	dmu    sync.Mutex
+	recent map[eth.Hash]*sent
+}
+
+type sent struct {
+	hash eth.Hash // zero while the first submission is still in progress
+	at   time.Time
+}
+
+// dedupeWindow: how long an identical submission returns the earlier tx.
+var dedupeWindow = 3 * time.Minute
+
+// begin claims calldata `data` for one submission. It returns the earlier
+// tx hash if this exact data was sent within dedupeWindow, or an error if
+// it is being sent right now.
+func (s *Server) begin(data []byte) (key eth.Hash, prev eth.Hash, err error) {
+	key = eth.Hash(eth.Keccak32(data))
+	s.dmu.Lock()
+	defer s.dmu.Unlock()
+	if s.recent == nil {
+		s.recent = map[eth.Hash]*sent{}
+	}
+	now := time.Now()
+	for k, v := range s.recent {
+		if now.Sub(v.at) > dedupeWindow {
+			delete(s.recent, k)
+		}
+	}
+	if v, ok := s.recent[key]; ok {
+		if v.hash == (eth.Hash{}) {
+			return key, eth.Hash{}, errors.New("this transaction is already being submitted")
+		}
+		return key, v.hash, nil
+	}
+	s.recent[key] = &sent{at: now}
+	return key, eth.Hash{}, nil
+}
+
+// done records the outcome of a begin: the tx hash, or (zero hash) a failure
+// so the same data may be tried again.
+func (s *Server) done(key, h eth.Hash) {
+	s.dmu.Lock()
+	defer s.dmu.Unlock()
+	if h == (eth.Hash{}) {
+		delete(s.recent, key)
+		return
+	}
+	s.recent[key] = &sent{hash: h, at: time.Now()}
+}
+
+// broadcast simulates and sends data once per dedupeWindow.
+func (s *Server) broadcast(ctx context.Context, data []byte, check func(*eth.Tx) error) (h eth.Hash, err error) {
+	key, prev, err := s.begin(data)
+	if err != nil || prev != (eth.Hash{}) {
+		return prev, err
+	}
+	defer func() { s.done(key, h) }()
+	msg := eth.CallMsg{From: s.Key.Address(), To: &s.K.Addr, Data: data}
+	// simulate first: a reverted claim would publish the secret for nothing
+	if _, err := s.K.C.EthCall(ctx, msg); err != nil {
+		return eth.Hash{}, fmt.Errorf("simulation failed: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.K.C.BuildTx(ctx, s.Key, &s.K.Addr, nil, data)
+	if err != nil {
+		return eth.Hash{}, err
+	}
+	if check != nil {
+		if err := check(tx); err != nil {
+			return eth.Hash{}, err
+		}
+	}
+	raw, hash := tx.Sign(s.Key)
+	if _, err := s.K.C.SendRaw(ctx, raw); err != nil {
+		s.K.C.ForgetNonce(s.Key.Address(), tx.Nonce) // don't leave a nonce gap
+		return eth.Hash{}, err
+	}
+	return hash, nil
 }
 
 type Response struct {
@@ -150,22 +234,8 @@ func (s *Server) Submit(ctx context.Context, c *eth.RelayedClaim) (eth.Hash, err
 			return eth.Hash{}, err
 		}
 	}
-	msg := eth.CallMsg{From: s.Key.Address(), To: &s.K.Addr, Data: data}
-	// simulate first: a reverted claim would publish the secret for nothing
-	if _, err := s.K.C.EthCall(ctx, msg); err != nil {
-		return eth.Hash{}, fmt.Errorf("simulation failed: %w", err)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.K.C.BuildTx(ctx, s.Key, &s.K.Addr, nil, data)
+	h, err := s.broadcast(ctx, data, func(tx *eth.Tx) error { return s.checkFee(c, tx) })
 	if err != nil {
-		return eth.Hash{}, err
-	}
-	if err := s.checkFee(c, tx); err != nil {
-		return eth.Hash{}, err
-	}
-	raw, h := tx.Sign(s.Key)
-	if _, err := s.K.C.SendRaw(ctx, raw); err != nil {
 		return eth.Hash{}, err
 	}
 	s.logf("relay: submitted claim for swap %s fee %s tx %s", c.Swap.ID().Hex(), c.Fee, h.Hex())
@@ -201,17 +271,8 @@ func (s *Server) SubmitIntent(ctx context.Context, in *Intent) (eth.Hash, error)
 	default:
 		return eth.Hash{}, errors.New("unknown intent kind")
 	}
-	if _, err := s.K.C.EthCall(ctx, eth.CallMsg{From: s.Key.Address(), To: &s.K.Addr, Data: data}); err != nil {
-		return eth.Hash{}, fmt.Errorf("simulation failed: %w", err)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.K.C.BuildTx(ctx, s.Key, &s.K.Addr, nil, data)
+	h, err := s.broadcast(ctx, data, nil)
 	if err != nil {
-		return eth.Hash{}, err
-	}
-	raw, h := tx.Sign(s.Key)
-	if _, err := s.K.C.SendRaw(ctx, raw); err != nil {
 		return eth.Hash{}, err
 	}
 	s.logf("relay: submitted %s for swap %s tx %s", in.Kind, in.Swap.ID().Hex(), h.Hex())

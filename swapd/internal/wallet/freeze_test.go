@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,8 +72,9 @@ func TestWalletNotFrozenByStalledMonero(t *testing.T) {
 	s.xmrW = xw
 	s.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go eng.StepAll(ctx)
+	stepped := make(chan struct{})
+	defer func() { cancel(); <-stepped }() // the step's last store write ends before TempDir cleanup
+	go func() { eng.StepAll(ctx); close(stepped) }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -94,3 +96,67 @@ func TestWalletNotFrozenByStalledMonero(t *testing.T) {
 }
 
 func big1() *big.Int { return big.NewInt(1) }
+
+// Unlocking with a stalled Monero link: attach opens the Monero wallet (up
+// to 60 s) and asks the ETH node for its chain id (15 s). Before the fix
+// it did that holding the server lock, so /v1/status hung too.
+func TestUnlockDoesNotBlockStatus(t *testing.T) {
+	rel := make(chan struct{})
+	ent := make(chan struct{}, 8)
+	xsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case ent <- struct{}{}:
+		default:
+		}
+		select {
+		case <-rel:
+		case <-r.Context().Done():
+		}
+	}))
+	defer xsrv.Close()
+	defer close(rel)
+	fe := &fakeEth{bal: big.NewInt(1e17), usdc: big.NewInt(0)}
+	fe.start(t)
+	s := NewServer(Config{DataDir: t.TempDir(), Listen: "127.0.0.1:0", XmrNet: keys.Stagenet,
+		EthRPC: fe.url, XmrWalletRPC: xsrv.URL, XmrRestoreHeight: 1})
+	h := s.Handler()
+	m, _ := NewMnemonic()
+	body, _ := json.Marshal(map[string]string{"mnemonic": m, "password": "correct-password-ok"})
+	go do(t, h, "POST", "/v1/wallet/restore", string(body), "")
+	select {
+	case <-ent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unlock never reached the Monero wallet")
+	}
+	done := make(chan int, 1)
+	go func() { code, _ := do(t, h, "GET", "/v1/status", "", ""); done <- code }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("FREEZE: /v1/status waits while unlock talks to a stalled Monero wallet")
+	}
+}
+
+// A stalled Monero call ends at the step deadline; the swap is retried
+// on the next round instead of waiting out the 300 s HTTP timeout.
+func TestStepTimeoutEndsStalledStep(t *testing.T) {
+	s, _, _, _ := sendServer(t)
+	xw, _ := stallingXmr(t)
+	r := sweepingRecord(t)
+	addSwap(t, s, r)
+	s.mu.Lock()
+	eng := s.eng
+	eng.Wallet, eng.MainWal = xw, "main"
+	eng.K = &eth.Contract{C: s.eth, ChainID: big.NewInt(421614)}
+	eng.StepTimeout = 300 * time.Millisecond
+	s.mu.Unlock()
+	t0 := time.Now()
+	eng.StepAll(context.Background())
+	if d := time.Since(t0); d > 3*time.Second {
+		t.Fatalf("step ran %s past a 300 ms step deadline", d)
+	}
+	rec, _ := eng.Snapshot(r.ID)
+	if rec.Phase != swap.PSweeping || len(rec.Log) == 0 || !strings.Contains(rec.Log[len(rec.Log)-1], "longer than") {
+		t.Fatalf("phase %s log %v", rec.Phase, rec.Log)
+	}
+}

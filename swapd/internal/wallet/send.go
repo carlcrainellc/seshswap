@@ -43,6 +43,45 @@ var sendGasKeep = big.NewInt(200_000_000_000_000) // 0.0002 ETH
 type sendState struct {
 	mu sync.Mutex
 	m  map[string]*sendPrep
+
+	// bmu serializes ETH/USDC broadcasts; out is what those sends take once
+	// mined. The node's "latest" balance doesn't show a sent tx until it is
+	// mined, so without this two sends confirmed back to back could each
+	// pass the balance check and together spend what open swaps hold.
+	bmu sync.Mutex
+	out []sendOutflow
+}
+
+type sendOutflow struct {
+	from  eth.Address
+	nonce uint64
+	eth   *big.Int // value + fee bound
+	usdc  *big.Int
+	at    time.Time
+}
+
+// sendOutflowTTL: a send not mined after this long was dropped or replaced.
+var sendOutflowTTL = 30 * time.Minute
+
+// unmined is what our own sent-but-unmined txs from `from` will still take
+// (call with bmu held). mined is the account's latest-block nonce.
+func (st *sendState) unmined(from eth.Address, mined uint64) (ethWei, usdc *big.Int) {
+	ethWei, usdc = new(big.Int), new(big.Int)
+	keep := st.out[:0]
+	for _, o := range st.out {
+		if o.from != from {
+			keep = append(keep, o)
+			continue
+		}
+		if o.nonce < mined || time.Since(o.at) > sendOutflowTTL {
+			continue
+		}
+		keep = append(keep, o)
+		ethWei.Add(ethWei, o.eth)
+		usdc.Add(usdc, o.usdc)
+	}
+	st.out = keep
+	return
 }
 
 type sendPrep struct {
@@ -428,6 +467,15 @@ func (s *Server) planEthSend(ctx context.Context, p *sendPrep, from, dst eth.Add
 	if err != nil {
 		return err
 	}
+	// Our own earlier sends that aren't mined yet aren't in the balance.
+	mined, err := c.MinedNonce(ctx, from)
+	if err != nil {
+		return err
+	}
+	s.send.bmu.Lock()
+	outETH, outUSDC := s.send.unmined(from, mined)
+	s.send.bmu.Unlock()
+	ethBal = maxZero(new(big.Int).Sub(ethBal, outETH))
 	tip, feeCap, err := c.Fees(ctx)
 	if err != nil {
 		return err
@@ -439,6 +487,7 @@ func (s *Server) planEthSend(ctx context.Context, p *sendPrep, from, dst eth.Add
 		if err != nil {
 			return err
 		}
+		tokBal = maxZero(new(big.Int).Sub(tokBal, outUSDC))
 		if p.All {
 			amt = new(big.Int).Sub(tokBal, h.usdc)
 			if amt.Sign() <= 0 {
@@ -619,10 +668,18 @@ func (s *Server) broadcastSend(ctx context.Context, p *sendPrep) (string, string
 		return "", "", errors.New("Ethereum RPC is not configured")
 	}
 	from := v.Keys.EthAddr
+	s.send.bmu.Lock()
+	defer s.send.bmu.Unlock()
+	mined, err := c.MinedNonce(ctx, from)
+	if err != nil {
+		return "", "", err
+	}
+	outETH, outUSDC := s.send.unmined(from, mined)
 	ethBal, err := c.Balance(ctx, from)
 	if err != nil {
 		return "", "", err
 	}
+	ethBal = new(big.Int).Sub(ethBal, outETH) // what is left once our earlier sends are mined
 	need := new(big.Int).Add(p.Fee, h.eth)
 	need.Add(need, p.value)
 	if need.Cmp(ethBal) > 0 {
@@ -633,6 +690,7 @@ func (s *Server) broadcastSend(ctx context.Context, p *sendPrep) (string, string
 		if err != nil {
 			return "", "", err
 		}
+		tb = new(big.Int).Sub(tb, outUSDC)
 		if new(big.Int).Add(p.Amount, h.usdc).Cmp(tb) > 0 {
 			return "", "", userErr{"a swap started since you reviewed this, or the balance changed. Review the send again"}
 		}
@@ -650,5 +708,10 @@ func (s *Server) broadcastSend(ctx context.Context, p *sendPrep) (string, string
 		c.ForgetNonce(from, tx.Nonce)
 		return "", "", err
 	}
+	o := sendOutflow{from: from, nonce: tx.Nonce, eth: new(big.Int).Add(p.Fee, p.value), usdc: new(big.Int), at: time.Now()}
+	if p.Coin == "USDC" {
+		o.usdc.Set(p.Amount)
+	}
+	s.send.out = append(s.send.out, o)
 	return hash.Hex(), s.explorer() + "/tx/" + hash.Hex(), nil
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -152,10 +153,32 @@ func (d *Daemon) GenerateBlocks(ctx context.Context, n int, addr string) error {
 // a time, so every operation takes the mutex and opens the wallet it needs.
 type Wallet struct {
 	r        rpc
-	mu       sync.Mutex
+	once     sync.Once
+	sem      chan struct{} // one operation at a time; waiting honours ctx
 	open     string
 	password string
 }
+
+// ErrWalletBusy: another Monero wallet call is still running (often a slow
+// or stalled node link) and ctx ran out while waiting for it.
+var ErrWalletBusy = errors.New("the Monero wallet is busy (still waiting on the node); try again in a moment")
+
+func (w *Wallet) lock(ctx context.Context) error {
+	w.once.Do(func() { w.sem = make(chan struct{}, 1) })
+	select {
+	case w.sem <- struct{}{}:
+		return nil
+	default:
+	}
+	select {
+	case w.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w (%v)", ErrWalletBusy, ctx.Err())
+	}
+}
+
+func (w *Wallet) unlock() { <-w.sem }
 
 func NewWallet(url, password string) *Wallet {
 	return &Wallet{r: newRPC(url, 300*time.Second), password: password}
@@ -163,8 +186,10 @@ func NewWallet(url, password string) *Wallet {
 
 // Session runs fn with wallet `name` open.
 func (w *Wallet) Session(ctx context.Context, name string, fn func(s *Sess) error) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	if err := w.lock(ctx); err != nil {
+		return err
+	}
+	defer w.unlock()
 	if w.open != name {
 		_ = w.r.call(ctx, nil, "close_wallet", nil)
 		w.open = ""
@@ -178,8 +203,10 @@ func (w *Wallet) Session(ctx context.Context, name string, fn func(s *Sess) erro
 
 // Create makes a new random wallet file (fails if it exists).
 func (w *Wallet) Create(ctx context.Context, name string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	if err := w.lock(ctx); err != nil {
+		return err
+	}
+	defer w.unlock()
 	_ = w.r.call(ctx, nil, "close_wallet", nil)
 	w.open = ""
 	err := w.r.call(ctx, nil, "create_wallet", map[string]any{"filename": name, "password": w.password, "language": "English"})
@@ -192,8 +219,10 @@ func (w *Wallet) Create(ctx context.Context, name string) error {
 // FromKeys creates (or reuses, if it already exists) a wallet from keys.
 // spendKeyHex == "" makes a view-only wallet.
 func (w *Wallet) FromKeys(ctx context.Context, name, address, viewKeyHex, spendKeyHex string, restoreHeight uint64) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	if err := w.lock(ctx); err != nil {
+		return err
+	}
+	defer w.unlock()
 	_ = w.r.call(ctx, nil, "close_wallet", nil)
 	w.open = ""
 	if err := w.r.call(ctx, nil, "open_wallet", map[string]any{"filename": name, "password": w.password}); err == nil {
