@@ -23,7 +23,7 @@ They are not refunded if the exit goes down.
 3. Press **Connect**. The wallet says Connected only once this computer's
    routes are up and a test request has gone through the exit (if none gets
    through in 30 seconds, it disconnects and says so); then it points DNS at the exit's resolver (`10.195.0.53`),
-   and puts it back when you disconnect, lock or close the wallet, or if the
+   and puts it back when you disconnect, sign out or close the wallet, or if the
    routes drop. See *System DNS*.
 4. Five minutes before your time ends, the wallet warns you and the
    **Add 1 hour** button turns bright. It shows the price and the new end
@@ -34,7 +34,7 @@ They are not refunded if the exit goes down.
    the whole time you're connected. Set `exitWarnBefore` in the wallet config
    (e.g. `"10m"`) to change when the warning shows.
 5. The wallet disconnects when the time is up, or when you press
-   **Disconnect**, lock the wallet or close it. Before it disconnects at the
+   **Disconnect**, sign out or close the wallet. Before it disconnects at the
    end, it checks the chain in case time was added another way.
 
 The wallet's own chain RPCs keep working while connected only because they

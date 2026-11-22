@@ -135,7 +135,7 @@ What you see in the sidebar:
 - **Stays up** while any swap is unfinished, and for `idleStop` (default 2
   minutes) after the last maker request when no swap is open (so a quote
   followed by "Swap" reuses the same router).
-- **Stops** when the last swap finishes or refunds, when you lock the
+- **Stops** when the last swap finishes or refunds, when you sign out of the
   wallet, when you switch to Direct, and when the wallet exits.
 - **Crash or kill -9:** the router stops too (measured 0.2 s). Linux drops
   the parent-death signal when a `setcap` program starts, so the wallet runs
