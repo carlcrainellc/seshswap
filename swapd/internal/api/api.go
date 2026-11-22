@@ -243,6 +243,10 @@ func (m *Maker) newSwap(ctx context.Context, q *SwapRequest) (*SwapResponse, err
 		m.count("quote_rejected")
 		return nil, errors.New("maker does not have enough unlocked XMR right now")
 	}
+	if err := m.checkOpenQuotes(); err != nil {
+		m.count("quote_rejected")
+		return nil, err
+	}
 	if err := m.checkExposure(xmrAmt); err != nil {
 		m.count("quote_rejected")
 		return nil, err

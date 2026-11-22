@@ -107,11 +107,15 @@ func TestValidateMakerRelayFiveUSDC(t *testing.T) {
 		t.Fatalf("valid USDC fee with gas key: %v", err)
 	}
 
-	// ETH maker may omit a gas key (relayer pays claim gas).
+	// ETH maker without a gas key: must fail too.
 	ethPol := Policy{RelayFee: ethWeiFee}
 	ethMin := new(big.Int).SetUint64(1e15) // 0.001 ETH
-	if err := ValidateMakerRelay(ethPol, eth.Address{}, ethMin, false); err != nil {
-		t.Fatalf("ETH maker without gas key is allowed: %v", err)
+	err = ValidateMakerRelay(ethPol, eth.Address{}, ethMin, false)
+	if err == nil || !strings.Contains(err.Error(), "SWAPD_ETH_KEY") {
+		t.Fatalf("ETH maker without a gas key must fail loudly, got %v", err)
+	}
+	if err := ValidateMakerRelay(ethPol, eth.Address{}, ethMin, true); err != nil {
+		t.Fatalf("ETH maker with gas key: %v", err)
 	}
 }
 

@@ -14,7 +14,7 @@
 // Secrets come from the environment, never from config files:
 //
 //	SWAPD_PASSPHRASE   store encryption passphrase (also the Monero wallet-file password)
-//	SWAPD_ETH_KEY      hex secp256k1 key (taker: required; maker: optional gas key; relayer: required)
+//	SWAPD_ETH_KEY      hex secp256k1 key (taker, maker gas key and relayer: required)
 //	SWAPD_REGISTRY_KEY hex key that owns a SeshRegistry listing (maker with registry.listingId; registry CLI)
 package main
 
@@ -86,6 +86,7 @@ type ServiceConfig struct {
 	MaxXmrPerEth  float64  `json:"maxXmrPerEth"`
 	AssetDecimals int      `json:"assetDecimals"` // >0: asset is a USD stablecoin with these decimals
 	MaxExposure   uint64   `json:"maxExposure"`   // piconero across all unfinished swaps (0 = no limit)
+	MaxOpenQuotes uint64   `json:"maxOpenQuotes"` // concurrent MNegotiated quotes (0 = no limit)
 	Endpoints     []string `json:"endpoints"`     // advertised in the signed offer document
 	PriceEvery    string   `json:"priceEvery"`    // refresh period (default 30s)
 }
@@ -163,7 +164,7 @@ func main() {
 		}
 		srv := &relay.Server{K: k, Key: ethKey, MinFeeMultiplier: mult, TokenMinFee: tm}
 		log.Printf("relayer %s listening on %s", ethKey.Address().Hex(), cfg.Listen)
-		check(http.ListenAndServe(cfg.Listen, logRemote(srv)))
+		check(newServer(cfg.Listen, logRemote(srv)).ListenAndServe())
 		return
 	}
 
@@ -240,7 +241,7 @@ func main() {
 		check(err)
 		m.Identity = id
 		if sc := cfg.Service; sc != nil {
-			m.AssetDecimals, m.MaxExposure, m.Endpoints = sc.AssetDecimals, sc.MaxExposure, sc.Endpoints
+			m.AssetDecimals, m.MaxExposure, m.MaxOpenQuotes, m.Endpoints = sc.AssetDecimals, sc.MaxExposure, sc.MaxOpenQuotes, sc.Endpoints
 			if sc.LivePrice {
 				m.Oracle = price.New(price.Config{MinSources: sc.MinSources, MaxDeviation: sc.MaxDeviation, MaxJump: sc.MaxJump,
 					MinXmrPerEth: sc.MinXmrPerEth, MaxXmrPerEth: sc.MaxXmrPerEth})
@@ -282,7 +283,7 @@ func main() {
 		}
 		go eng.Run(ctx, poll)
 		log.Printf("maker listening on %s (publish via a Tor onion service or a Session Router .sesh address)", cfg.Listen)
-		srv := &http.Server{Addr: cfg.Listen, Handler: logRemote(m), ReadHeaderTimeout: 10 * time.Second}
+		srv := newServer(cfg.Listen, logRemote(m))
 		go func() { <-ctx.Done(); _ = srv.Close() }()
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			check(err)

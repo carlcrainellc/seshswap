@@ -320,6 +320,10 @@ The v3 contract already pulls the token with `transferFrom` after the wallet's
 `approve`. The included `contracts/src/MockUSDC.sol` is test-only, mintable by
 its deployer, and is not the real USD Coin.
 
+Every maker needs `SWAPD_ETH_KEY` (a small amount of ETH for gas) so it can
+submit its own claim if a relayer refuses or never submits it; `swapd maker`
+will not start without one.
+
 A maker that offers an ERC-20 must set `policy.TokenRelayFee` (and the
 relayer's `relayTokenMinFee`) in **token units**, strictly below the
 smallest lock, and must have `SWAPD_ETH_KEY` so it can self-relay with

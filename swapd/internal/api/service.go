@@ -27,6 +27,7 @@ type Service struct {
 	// (priced at 1 USD); 0 means the native coin (ETH).
 	AssetDecimals int
 	MaxExposure   uint64 // piconero: reserved + locked-unsettled XMR may not exceed this (0 = no limit)
+	MaxOpenQuotes uint64 // max swaps in MNegotiated (unfunded quotes); 0 = no limit
 	Identity      *Identity
 	Endpoints     []string      // advertised in the signed offer document
 	DocTTL        time.Duration // signed offer lifetime (default 1 h)
@@ -147,6 +148,23 @@ func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address) (*
 		t.Registry, t.ListingID = &a, m.Registry.ListingID
 	}
 	return t, nil
+}
+
+func (m *Maker) checkOpenQuotes() error {
+	if m.MaxOpenQuotes == 0 {
+		return nil
+	}
+	n := uint64(0)
+	for _, id := range m.Engine.IDs() {
+		ph, _, ok := m.Engine.Get(id)
+		if ok && ph == swap.MNegotiated {
+			n++
+		}
+	}
+	if n >= m.MaxOpenQuotes {
+		return fmt.Errorf("maker has too many open quotes (%d); try again shortly", n)
+	}
+	return nil
 }
 
 func (m *Maker) checkExposure(xmrAmt uint64) error {

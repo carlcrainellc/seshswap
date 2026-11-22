@@ -104,12 +104,16 @@ func ApplyOfferRelayFee(p *Policy, asset eth.Address, offerFee *big.Int) {
 }
 
 // ValidateMakerRelay checks that the fee for asset is below minLock, and that
-// an ERC-20 maker has a gas key so it can self-relay if the relayer refuses.
+// the maker has a gas key so it can submit its own claim if a relayer refuses
+// or never submits it.
 func ValidateMakerRelay(p Policy, asset eth.Address, minLock *big.Int, hasGasKey bool) error {
 	if err := CheckRelayFee(p.FeeFor(asset), minLock); err != nil {
 		return err
 	}
-	if !asset.IsZero() && !hasGasKey {
+	if !hasGasKey {
+		if asset.IsZero() {
+			return errors.New("maker needs a gas key (SWAPD_ETH_KEY) so it can self-relay if the relayer refuses or leaks a claim")
+		}
 		return errors.New("ERC-20 maker needs a gas key (SWAPD_ETH_KEY) so it can self-relay if the relayer refuses")
 	}
 	return nil
