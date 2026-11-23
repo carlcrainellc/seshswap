@@ -131,3 +131,38 @@ func TestSwapRequestConfsCompat(t *testing.T) {
 		t.Fatalf("round trip %d", got.MinConfs)
 	}
 }
+
+// A maker with a tight policy (margin 10 min) and a fixed d1, like the public
+// test makers, must still give windows a default wallet (margin 30 min)
+// accepts when more confirmations are asked for or a size tier applies.
+func TestTightMakerWindowsPassDefaultTaker(t *testing.T) {
+	m := testMaker(0)
+	m.Engine.Policy = swap.Policy{Margin: 600, XmrLockBudget: 600, EthConfs: 2, MinGrace: 1800}
+	m.Offer.D1, m.Offer.D2, m.Offer.Grace = 7200, 3600, 21600
+	e := &swap.Engine{Policy: swap.DefaultPolicy(), AssumeBlockSecs: 120}
+	pol := e.Policy
+	ctx := context.Background()
+	for _, c := range []struct {
+		q    string
+		want uint64
+	}{
+		{"value=100000000000000000", 10},
+		{"value=100000000000000000&minConfs=20", 20},
+		{"value=100000000000000000&minConfs=30", 30},
+		{"value=2000000000000000000", 15}, // 2 XMR: size tier
+		{"value=6000000000000000000&minConfs=60", 60},
+	} {
+		code, tr, msg := getQuote(t, m, c.q)
+		if code != 200 || tr.MinConfs != c.want {
+			t.Fatalf("%s: %d %q confs %d", c.q, code, msg, tr.MinConfs)
+		}
+		if want := 7200 + swap.ConfirmSecs(c.want-10, 120); tr.D1 != want {
+			t.Fatalf("%s: d1 %d, want %d", c.q, tr.D1, want)
+		}
+		p := TakeParams{Value: tr.Value, MinD1: 2*pol.Margin + 1800, MinD2: 2 * pol.Margin,
+			MaxConfs: swap.XmrConfMax, MinConfs: c.want}
+		if _, err := CheckTerms(ctx, e, p, tr.D1, tr.D2, tr.MinConfs, tr.XMR, tr.Grace, tr.Premium); err != nil {
+			t.Fatalf("%s: default taker refused d1 %d: %v", c.q, tr.D1, err)
+		}
+	}
+}

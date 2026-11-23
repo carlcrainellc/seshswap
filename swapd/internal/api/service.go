@@ -216,7 +216,12 @@ func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address, wa
 		return nil, err
 	}
 	d1, d2 := swap.Windows(confs, bs, pol)
-	d1, d2 = max(d1, o.D1), max(d2, o.D2)
+	// The configured d1 was picked for the offer's own minConfs. When a size
+	// tier or the taker asks for more, add the extra confirmation time on top,
+	// so the window still passes a taker whose safety margin is larger than
+	// this maker's (the wallet's default margin is 30 min).
+	base := max(o.MinConfs, swap.XmrConfFloor)
+	d1, d2 = max(d1, o.D1+swap.ConfirmSecs(confs-min(confs, base), bs)), max(d2, o.D2)
 	grace := max(o.Grace, swap.Grace(pol))
 	premium := new(big.Int)
 	if o.PremiumBps > 0 && o.Asset.IsZero() {

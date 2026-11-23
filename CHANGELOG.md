@@ -9,6 +9,10 @@
   timeouts to match, or decline if it's over their limit (`maxConfs`,
   default 60). A quote from an older maker that offers fewer is refused.
   `swapd take -min-confs` sends the same request.
+- A maker's fixed `d1` now grows with the extra confirmation time when a
+  swap needs more than the offer's `minConfs`, so wallets (which keep a
+  30-minute margin) accept Safer and Safest quotes from makers with tight
+  settings.
 - Makers can set size-based spreads with `spreadTiers` (for example 1 %
   under 5 XMR, 2 % from 5 XMR, 4 % from 20 XMR). Without it the flat
   `spreadBps` works as before. The quote screen now shows the market rate,
