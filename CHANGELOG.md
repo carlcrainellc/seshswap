@@ -9,6 +9,10 @@
   timeouts to match, or decline if it's over their limit (`maxConfs`,
   default 60). A quote from an older maker that offers fewer is refused.
   `swapd take -min-confs` sends the same request.
+- Makers can set size-based spreads with `spreadTiers` (for example 1 %
+  under 5 XMR, 2 % from 5 XMR, 4 % from 20 XMR). Without it the flat
+  `spreadBps` works as before. The quote screen now shows the market rate,
+  the maker's markup and your rate before you confirm.
 - Larger swaps wait longer sooner: 15 confirmations from 1 XMR, 20 from
   5 XMR and 30 from 20 XMR (was 10, 50 and 200 XMR). Under 1 XMR is still 10.
 

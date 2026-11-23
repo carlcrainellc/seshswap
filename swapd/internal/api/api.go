@@ -54,14 +54,15 @@ type Offer struct {
 	D2          uint64       `json:"d2"`
 	MinConfs    uint64       `json:"minConfs"`
 	XmrNet      keys.Network `json:"xmrNet"`
-	RelayFee    *big.Int     `json:"relayFee"`           // deducted from the asset amount by the relayer
-	TTL         int64        `json:"ttl"`                // seconds the taker has to lock (quote expiry)
-	Grace       uint64       `json:"grace"`              // intent freeze; 0 = from policy
-	PremiumBps  uint64       `json:"premiumBps"`         // taker premium (native-coin swaps), forfeited on a cancel after our ack
-	WaiveAfter  int          `json:"waiveAfter"`         // waive the premium after this many completed swaps with the same taker (0 = never)
-	SpreadBps   uint64       `json:"spreadBps"`          // with a price oracle: maker's spread below the mid price
-	Direction   string       `json:"direction"`          // "eth2xmr" (only direction built so far)
-	MaxConfs    uint64       `json:"maxConfs,omitempty"` // most confirmations a taker may ask for; 0 = swap.XmrConfMax
+	RelayFee    *big.Int     `json:"relayFee"`              // deducted from the asset amount by the relayer
+	TTL         int64        `json:"ttl"`                   // seconds the taker has to lock (quote expiry)
+	Grace       uint64       `json:"grace"`                 // intent freeze; 0 = from policy
+	PremiumBps  uint64       `json:"premiumBps"`            // taker premium (native-coin swaps), forfeited on a cancel after our ack
+	WaiveAfter  int          `json:"waiveAfter"`            // waive the premium after this many completed swaps with the same taker (0 = never)
+	SpreadBps   uint64       `json:"spreadBps"`             // with a price oracle: maker's spread below the mid price
+	SpreadTiers []SpreadTier `json:"spreadTiers,omitempty"` // optional size-based spreads; replace SpreadBps when set
+	Direction   string       `json:"direction"`             // "eth2xmr" (only direction built so far)
+	MaxConfs    uint64       `json:"maxConfs,omitempty"`    // most confirmations a taker may ask for; 0 = swap.XmrConfMax
 	Expires     int64        `json:"expires,omitempty"`
 }
 

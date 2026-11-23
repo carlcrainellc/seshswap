@@ -731,7 +731,8 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 				"premiumWei": "0", "d1": 2400 + extra*2, "d2": 3600, "grace": 21600,
 				"minConfs": confs, "estReadySecs": 1500 + extra, "estSpendableSecs": 2700 + extra,
 				"expires": time.Now().Add(45 * time.Second).Unix(),
-				"demo":    true, "confLevel": level, "sizeConfs": swap.XmrConfFloor, "extraWaitSecs": extra,
+				"rate":    "1 USDC = 0.003 XMR", "marketRate": "1 USDC = 0.00303 XMR", "markupPct": "1.00",
+				"demo": true, "confLevel": level, "sizeConfs": swap.XmrConfFloor, "extraWaitSecs": extra,
 			})
 			return
 		}
@@ -744,7 +745,8 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 			"premiumWei": "0", "d1": 2400 + extra*2, "d2": 3600, "grace": 21600,
 			"minConfs": confs, "estReadySecs": 1500 + extra, "estSpendableSecs": 2700 + extra,
 			"expires": time.Now().Add(45 * time.Second).Unix(),
-			"demo":    true, "confLevel": level, "sizeConfs": swap.XmrConfFloor, "extraWaitSecs": extra,
+			"rate":    "1 ETH = 3.1 XMR", "marketRate": "1 ETH = 3.131313 XMR", "markupPct": "1.00",
+			"demo": true, "confLevel": level, "sizeConfs": swap.XmrConfFloor, "extraWaitSecs": extra,
 		})
 		return
 	}
@@ -847,6 +849,14 @@ func (s *Server) quoteOut(ctx context.Context, terms *api.Terms, offer *api.Offe
 		out["valueLabel"] = weiToETH(terms.Value) + " ETH"
 	}
 	asset, _ := out["asset"].(string)
+	dec := 18
+	if asset == "USDC" {
+		dec = 6
+		if s.Cfg.USDCDecimals > 0 {
+			dec = s.Cfg.USDCDecimals
+		}
+	}
+	rateOut(out, terms, asset, dec)
 	if chk, err := s.fairPrice(ctx, asset, terms.Value, terms.XMR); err != nil {
 		out["fairPriceError"] = err.Error()
 	} else if chk != nil {

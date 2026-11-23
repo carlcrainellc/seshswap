@@ -52,13 +52,17 @@ type Terms struct {
 	Value       *big.Int `json:"value"`
 	XMR         uint64   `json:"xmr"`
 	PicoPerUnit *big.Int `json:"picoPerUnit"`
-	D1          uint64   `json:"d1"`
-	D2          uint64   `json:"d2"`
-	MinConfs    uint64   `json:"minConfs"`
-	Grace       uint64   `json:"grace"`
-	Premium     *big.Int `json:"premium"`
-	Expires     int64    `json:"expires"`
-	BlockSecs   uint64   `json:"blockSecs"` // Monero mean block time used for the windows and estimates
+	// MarketPerUnit is the rate before the maker's spread and SpreadBps the
+	// spread taken off it for this size (unset for a static price without tiers).
+	MarketPerUnit *big.Int `json:"marketPerUnit,omitempty"`
+	SpreadBps     uint64   `json:"spreadBps,omitempty"`
+	D1            uint64   `json:"d1"`
+	D2            uint64   `json:"d2"`
+	MinConfs      uint64   `json:"minConfs"`
+	Grace         uint64   `json:"grace"`
+	Premium       *big.Int `json:"premium"`
+	Expires       int64    `json:"expires"`
+	BlockSecs     uint64   `json:"blockSecs"` // Monero mean block time used for the windows and estimates
 	// Estimates for the taker (seconds): time to XMR arrival in the shared
 	// address, and until the XMR is spendable in the taker's own wallet.
 	EstReadySecs     uint64 `json:"estReadySecs"`
@@ -69,8 +73,47 @@ type Terms struct {
 	ListingID uint64       `json:"listingId,omitempty"`
 }
 
-// picoPerUnit returns the current rate (piconero per 1e18 base units).
-func (m *Maker) picoPerUnit() (*big.Int, error) {
+// SpreadTier is a size-based spread: from FromXmr XMR (measured at the
+// market rate) the maker takes Bps off the market rate. The tier with the
+// highest FromXmr at or below the swap's size applies.
+type SpreadTier struct {
+	FromXmr float64 `json:"fromXmr"`
+	Bps     uint64  `json:"bps"`
+}
+
+// CheckSpreadTiers refuses tiers that can't be used (negative sizes, 100 % or
+// more, or the same size twice).
+func CheckSpreadTiers(ts []SpreadTier) error {
+	seen := map[float64]bool{}
+	for _, t := range ts {
+		if !(t.FromXmr >= 0) || math.IsInf(t.FromXmr, 0) || t.Bps >= 10000 || seen[t.FromXmr] {
+			return fmt.Errorf("bad spread tier %+v (fromXmr >= 0, bps < 10000, each size once)", t)
+		}
+		seen[t.FromXmr] = true
+	}
+	return nil
+}
+
+// spreadFor is the spread for a swap of xmr piconero (at the market rate).
+// Without tiers it is SpreadBps. With tiers, the highest tier whose FromXmr
+// is at or below the size; SpreadBps if none matches.
+func (o *Offer) spreadFor(xmr uint64) (bps uint64, tiered bool) {
+	if len(o.SpreadTiers) == 0 {
+		return o.SpreadBps, false
+	}
+	bps, best := o.SpreadBps, -1.0
+	for _, t := range o.SpreadTiers {
+		from := uint64(math.Round(t.FromXmr * 1e12))
+		if xmr >= from && t.FromXmr > best {
+			bps, best = t.Bps, t.FromXmr
+		}
+	}
+	return bps, true
+}
+
+// marketPerUnit is the rate before the maker's spread (piconero per 1e18
+// base units): the live median price, or the static Offer.PicoPerUnit.
+func (m *Maker) marketPerUnit() (*big.Int, error) {
 	if m.Oracle == nil {
 		return m.Offer.PicoPerUnit, nil
 	}
@@ -78,18 +121,54 @@ func (m *Maker) picoPerUnit() (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	spread := 1 - float64(m.Offer.SpreadBps)/10000
 	var pico float64
 	if m.AssetDecimals == 0 {
-		pico = snap.XmrPerEth() * spread * 1e12 // per 1e18 wei = per ETH
+		pico = snap.XmrPerEth() * 1e12 // per 1e18 wei = per ETH
 	} else {
-		pico = 1e30 / math.Pow10(m.AssetDecimals) / snap.XMRUSD * spread
+		pico = 1e30 / math.Pow10(m.AssetDecimals) / snap.XMRUSD
 	}
 	if !(pico > 0) || math.IsInf(pico, 0) {
 		return nil, errors.New("bad price")
 	}
 	b, _ := new(big.Float).SetFloat64(pico).Int(nil)
 	return b, nil
+}
+
+// rateFor is the rate the maker gives for value: the market rate less the
+// spread for the swap's size. A static price with no tiers is used as is
+// (its spread is already in it); with tiers, they apply on top of it.
+// market is nil when no spread applies.
+func (m *Maker) rateFor(value *big.Int) (ppu, market *big.Int, bps uint64, err error) {
+	mid, err := m.marketPerUnit()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if mid == nil || mid.Sign() <= 0 {
+		return nil, nil, 0, errors.New("bad price")
+	}
+	x := new(big.Int).Mul(value, mid)
+	x.Div(x, one18)
+	size := uint64(math.MaxUint64)
+	if x.IsUint64() {
+		size = x.Uint64()
+	}
+	bps, tiered := m.Offer.spreadFor(size)
+	if m.Oracle == nil && !tiered {
+		return mid, nil, 0, nil
+	}
+	if bps >= 10000 {
+		return nil, nil, 0, errors.New("spread must be under 100%")
+	}
+	ppu = new(big.Int).Mul(mid, big.NewInt(int64(10000-bps)))
+	ppu.Div(ppu, big.NewInt(10000))
+	return ppu, mid, bps, nil
+}
+
+// picoPerUnit is the indicative rate for the offer: the rate for the
+// smallest swap.
+func (m *Maker) picoPerUnit() (*big.Int, error) {
+	ppu, _, _, err := m.rateFor(new(big.Int))
+	return ppu, err
 }
 
 func (m *Maker) currentOffer() (Offer, error) {
@@ -113,7 +192,7 @@ func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address, wa
 	if value == nil || value.Cmp(o.Min) < 0 || value.Cmp(o.Max) > 0 {
 		return nil, errors.New("asset or amount outside the offer")
 	}
-	ppu, err := m.picoPerUnit()
+	ppu, market, bps, err := m.rateFor(value)
 	if err != nil {
 		return nil, fmt.Errorf("not quoting: %w", err)
 	}
@@ -146,7 +225,7 @@ func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address, wa
 			premium.Div(premium, big.NewInt(10000))
 		}
 	}
-	t := &Terms{Value: value, XMR: xmrAmt, PicoPerUnit: ppu, D1: d1, D2: d2, MinConfs: confs, Grace: grace, BlockSecs: bs,
+	t := &Terms{Value: value, XMR: xmrAmt, PicoPerUnit: ppu, MarketPerUnit: market, SpreadBps: bps, D1: d1, D2: d2, MinConfs: confs, Grace: grace, BlockSecs: bs,
 		Premium: premium, Expires: time.Now().Unix() + o.TTL,
 		EstReadySecs:     pol.XmrLockBudget/3 + (confs+1)*bs,
 		EstSpendableSecs: pol.XmrLockBudget/3 + (confs+1)*bs + (swap.XmrSpendLock+1)*bs,
@@ -202,7 +281,7 @@ func (m *Maker) OfferDoc() (*SignedOffer, error) {
 	now := time.Now()
 	d := &OfferDoc{Version: 1, Endpoints: m.Endpoints, Direction: o.Direction, ChainID: o.ChainID,
 		Contract: o.Contract, Asset: o.Asset, XmrNet: o.XmrNet, PicoPerUnit: o.PicoPerUnit, Min: o.Min, Max: o.Max,
-		SpreadBps: o.SpreadBps, PremiumBps: o.PremiumBps, MinConfs: max(o.MinConfs, swap.XmrConfFloor),
+		SpreadBps: o.SpreadBps, SpreadTiers: o.SpreadTiers, PremiumBps: o.PremiumBps, MinConfs: max(o.MinConfs, swap.XmrConfFloor),
 		Grace: max(o.Grace, swap.Grace(m.Engine.Policy)), Issued: now.Unix(), Expires: now.Add(ttl).Unix()}
 	return m.Identity.SignOffer(d)
 }

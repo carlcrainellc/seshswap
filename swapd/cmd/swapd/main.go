@@ -225,6 +225,7 @@ func main() {
 		if cfg.Offer == nil || cfg.PayoutTo.IsZero() {
 			log.Fatal("maker needs offer and payoutTo")
 		}
+		check(api.CheckSpreadTiers(cfg.Offer.SpreadTiers))
 		cfg.Offer.ChainID, cfg.Offer.Contract, cfg.Offer.XmrNet = cid, cfg.Contract, cfg.XmrNet
 		m := &api.Maker{Offer: *cfg.Offer, Engine: eng, PayoutTo: cfg.PayoutTo}
 		if ep := cfg.ExitPay; ep != nil {

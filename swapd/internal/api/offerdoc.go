@@ -33,6 +33,7 @@ type OfferDoc struct {
 	Min         *big.Int     `json:"min"`
 	Max         *big.Int     `json:"max"`
 	SpreadBps   uint64       `json:"spreadBps"`
+	SpreadTiers []SpreadTier `json:"spreadTiers,omitempty"`
 	PremiumBps  uint64       `json:"premiumBps"`
 	MinConfs    uint64       `json:"minConfs"`
 	Grace       uint64       `json:"grace"`

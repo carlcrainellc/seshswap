@@ -2,11 +2,13 @@ package wallet
 
 import (
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 
+	"github.com/carlcrainellc/seshswap/swapd/internal/api"
 	"github.com/carlcrainellc/seshswap/swapd/internal/swap"
 )
 
@@ -132,5 +134,26 @@ func confsOut(out map[string]any, level string, confs, xmrPico, reorg, blockSecs
 	out["confLevel"], out["sizeConfs"] = level, size
 	if confs > size {
 		out["extraWaitSecs"] = (confs - size) * blockSecs
+	}
+}
+
+// rateOut adds the price lines for the quote screen: the maker's market rate,
+// its markup for this size, and the rate you get, each as XMR per 1 ETH or
+// 1 USDC. Makers before 0.1.8 send no market rate; then only "rate" is set.
+func rateOut(out map[string]any, terms *api.Terms, asset string, decimals int) {
+	per := func(ppu *big.Int) string {
+		if ppu == nil || ppu.Sign() <= 0 {
+			return ""
+		}
+		x := new(big.Int).Mul(ppu, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+		x.Div(x, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+		return "1 " + asset + " = " + formatUnits(x, 12) + " XMR"
+	}
+	if r := per(terms.PicoPerUnit); r != "" {
+		out["rate"] = r
+	}
+	if r := per(terms.MarketPerUnit); r != "" {
+		out["marketRate"] = r
+		out["markupPct"] = strconv.FormatFloat(float64(terms.SpreadBps)/100, 'f', 2, 64)
 	}
 }

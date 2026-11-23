@@ -574,6 +574,7 @@ function swapForm() {
           ${q.demo ? " Sample quote (demo)." : ""}
         </div>
       </div>
+      ${rateBox(q)}
       ${fairPriceBox(q)}
       ${quotesBox(q)}
       <div class="refund">${esc("If the other side does not show up, your "+(q.asset||"ETH")+" is returned automatically.")}</div>
@@ -582,6 +583,15 @@ function swapForm() {
       ${err()}
     </div>
   `, {nav:"swap"});
+}
+
+// Market rate, the maker's markup and the rate you get (older makers send only the rate).
+function rateBox(q) {
+  if (!q.rate) return "";
+  const rows = q.marketRate
+    ? [["Market rate", q.marketRate], ["Maker's markup", q.markupPct + "%"], ["Your rate", q.rate]]
+    : [["Your rate", q.rate]];
+  return `<div class="a" data-testid="rate-box">${rows.map(([k,v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("")}</div>`;
 }
 
 // "Waits for 20 Monero confirmations (Safer: about 20 minutes longer)."
@@ -601,6 +611,7 @@ function confirmSwap() {
       <div class="bal"><div class="k">You sell</div><div class="v">${esc(q.valueLabel||((q.valueEth||"")+" ETH"))}</div></div>
       <div class="bal"><div class="k">You buy at least</div><div class="v">${esc(q.xmr)} XMR</div></div>
       ${q.listingId ? `<div class="a" data-testid="confirm-maker">From bonded maker #${esc(q.listingId)} (${esc(short(q.sesh))}), bond ${esc(q.bondEth)} ETH. It signs a commitment that is recorded on-chain after your lock; if it doesn't acknowledge its XMR lock in time, part of its bond is paid to you.</div>` : ""}
+      ${rateBox(q)}
       ${fairPriceBox(q)}
       <p class="lead">This is the binding approval. After you confirm, your ${esc(q.asset||"ETH")} is locked in the contract until the swap finishes or is refunded.</p>
       <div class="refund">${q.estReadySecs ? `Swap done in about ${Math.round(q.estReadySecs/60)} minutes.${confsLine(q)} ` : ""}If something goes wrong, your ${esc(q.asset||"ETH")} is returned automatically.</div>

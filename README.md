@@ -43,6 +43,19 @@ confirmations (about 2 minutes each). Small swaps wait 10. Larger ones wait
 more: 15 from 1 XMR, 20 from 5 XMR, 30 from 20 XMR. In Settings you can pick
 Safer (at least 20) or Safest (at least 30). Details: [design](DESIGN.md) §9.
 
+## Maker pricing
+
+A maker (`swapd maker`) takes a spread off the market price: `spreadBps` in
+its offer, or size-based `spreadTiers` (from 0.1.8):
+
+    "spreadTiers": [{"fromXmr": 0, "bps": 100}, {"fromXmr": 5, "bps": 200}, {"fromXmr": 20, "bps": 400}]
+
+The tier with the highest `fromXmr` at or below the swap's size applies (size
+measured at the market price). With a live price the spread comes off the
+median; with a fixed `picoPerUnit`, tiers come off that fixed rate, and without
+tiers the fixed rate is used as is. The wallet shows the market rate, the
+markup and your rate before you confirm.
+
 The tarball has the wallet, a bundled Session Router and the official
 `monero-wallet-rpc` (v0.18.5.4, checked against binaryFate's signed hashes).
 Testnet settings are built in.

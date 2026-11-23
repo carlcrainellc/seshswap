@@ -2,11 +2,13 @@ package wallet
 
 import (
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/carlcrainellc/seshswap/swapd/internal/api"
 	"github.com/carlcrainellc/seshswap/swapd/internal/keys"
 )
 
@@ -86,5 +88,21 @@ func TestQuoteAsksMakerForConfs(t *testing.T) {
 	code, q = do(t, h, "GET", "/v1/quote?eth=0.01", "", "")
 	if code != 422 || !strings.Contains(q["error"].(string), "older version") {
 		t.Fatalf("old maker %d %v", code, q)
+	}
+}
+
+func TestRateOut(t *testing.T) {
+	out := map[string]any{}
+	// 0.0021 XMR per USDC at the market, 1 % markup.
+	mk := new(big.Int).Mul(big.NewInt(21), new(big.Int).Exp(big.NewInt(10), big.NewInt(20), nil))
+	ppu := new(big.Int).Div(new(big.Int).Mul(mk, big.NewInt(9900)), big.NewInt(10000))
+	rateOut(out, &api.Terms{PicoPerUnit: ppu, MarketPerUnit: mk, SpreadBps: 100}, "USDC", 6)
+	if out["marketRate"] != "1 USDC = 0.0021 XMR" || out["rate"] != "1 USDC = 0.002079 XMR" || out["markupPct"] != "1.00" {
+		t.Fatalf("usdc %v", out)
+	}
+	out = map[string]any{}
+	rateOut(out, &api.Terms{PicoPerUnit: big.NewInt(5e12)}, "ETH", 18) // an older maker
+	if out["rate"] != "1 ETH = 5 XMR" || out["marketRate"] != nil {
+		t.Fatalf("eth %v", out)
 	}
 }
