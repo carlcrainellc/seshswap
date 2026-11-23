@@ -76,7 +76,8 @@ type Config struct {
 	Demo               bool          `json:"demo,omitempty"` // sample data for screenshots; no real funds
 	AppVersion         string        `json:"-"`              // shown on the Settings screen
 	Policy             *swap.Policy  `json:"policy,omitempty"`
-	FaucetURL          string        `json:"faucetUrl,omitempty"` // testnet faucet; "" = DefaultFaucetURL, "off" = hide
+	FaucetURL          string        `json:"faucetUrl,omitempty"`     // testnet faucet; "" = DefaultFaucetURL, "off" = hide
+	Confirmations      string        `json:"confirmations,omitempty"` // "standard" (default), "safer" (20) or "safest" (30); Settings saves to prefs.json
 }
 
 var mainnets = map[int64]string{1: "Ethereum", 10: "Optimism", 100: "Gnosis", 8453: "Base", 42161: "Arbitrum One"}
@@ -133,6 +134,7 @@ func NewServer(cfg Config) *Server {
 		cfg.MainWallet = "swapwallet-main"
 	}
 	s := &Server{Cfg: cfg, Log: log.Printf}
+	s.loadPrefs()
 	var tk [32]byte
 	if _, err := rand.Read(tk[:]); err != nil {
 		panic(err)
@@ -165,6 +167,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/swaps", s.wrap(s.swaps))
 	mux.HandleFunc("/v1/swaps/", s.wrap(s.oneSwap))
 	mux.HandleFunc("/v1/settings", s.wrap(s.settings))
+	mux.HandleFunc("/v1/settings/confirmations", s.wrap(s.confSettings))
 	mux.HandleFunc("/v1/registry/search", s.wrap(s.registrySearch))
 	mux.HandleFunc("/v1/exits", s.wrap(s.exitsList))
 	mux.HandleFunc("/v1/exits/status", s.wrap(s.exitsStatus))
@@ -711,8 +714,13 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	makerURL := s.curMakerURL()
+	level := s.confLevel()
+	want := confLevels[level]
 	if s.Cfg.Demo && makerURL == "" {
-		// A realistic sample quote, clearly marked.
+		// A realistic sample quote, clearly marked. Small amounts: the size
+		// rule is 10 confirmations, so the setting alone adds the wait.
+		confs := max(want, uint64(swap.XmrConfFloor))
+		extra := (confs - swap.XmrConfFloor) * swap.XmrBlockSecs
 		if wantUSDC {
 			// 1 USDC (1e6) → 0.003 XMR = 3e9 pico: pico = val * 3000.
 			pico := new(big.Int).Mul(val, big.NewInt(3000))
@@ -720,10 +728,10 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 				"value": val.String(), "valueUsdc": formatUnits(val, 6),
 				"valueLabel": formatUnits(val, 6) + " USDC", "asset": "USDC",
 				"xmr": picoToXMR(pico.Uint64()), "xmrPico": pico.Uint64(),
-				"premiumWei": "0", "d1": 2400, "d2": 3600, "grace": 21600,
-				"minConfs": 10, "estReadySecs": 1500, "estSpendableSecs": 2700,
+				"premiumWei": "0", "d1": 2400 + extra*2, "d2": 3600, "grace": 21600,
+				"minConfs": confs, "estReadySecs": 1500 + extra, "estSpendableSecs": 2700 + extra,
 				"expires": time.Now().Add(45 * time.Second).Unix(),
-				"demo":    true,
+				"demo":    true, "confLevel": level, "sizeConfs": swap.XmrConfFloor, "extraWaitSecs": extra,
 			})
 			return
 		}
@@ -733,10 +741,10 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 			"value": val.String(), "valueEth": weiToETH(val),
 			"valueLabel": weiToETH(val) + " ETH", "asset": "ETH",
 			"xmr": picoToXMR(pico.Uint64()), "xmrPico": pico.Uint64(),
-			"premiumWei": "0", "d1": 2400, "d2": 3600, "grace": 21600,
-			"minConfs": 10, "estReadySecs": 1500, "estSpendableSecs": 2700,
+			"premiumWei": "0", "d1": 2400 + extra*2, "d2": 3600, "grace": 21600,
+			"minConfs": confs, "estReadySecs": 1500 + extra, "estSpendableSecs": 2700 + extra,
 			"expires": time.Now().Add(45 * time.Second).Unix(),
-			"demo":    true,
+			"demo":    true, "confLevel": level, "sizeConfs": swap.XmrConfFloor, "extraWaitSecs": extra,
 		})
 		return
 	}
@@ -780,9 +788,13 @@ func (s *Server) quote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var terms api.Terms
-	u := strings.TrimRight(makerURL, "/") + "/v1/quote?value=" + val.String()
+	u := strings.TrimRight(makerURL, "/") + "/v1/quote?value=" + val.String() + quoteParam(want)
 	if err := getJSON(ctx, s.http, u, &terms); err != nil {
 		writeErr(w, 502, "could not get a quote: "+friendlyNetErr(err))
+		return
+	}
+	if terms.MinConfs < want {
+		writeErr(w, 422, fmt.Sprintf("this maker offers %d Monero confirmations, but your setting asks for %d. It may run an older version. Choose Standard in Settings, or try another maker.", terms.MinConfs, want))
 		return
 	}
 	var offer api.Offer
@@ -816,6 +828,14 @@ func (s *Server) quoteOut(ctx context.Context, terms *api.Terms, offer *api.Offe
 		"estReadySecs": terms.EstReadySecs, "estSpendableSecs": terms.EstSpendableSecs,
 		"makerUrl": makerURL,
 	}
+	var reorg uint64
+	s.mu.Lock()
+	eng := s.eng
+	s.mu.Unlock()
+	if eng != nil {
+		reorg = eng.ReorgDepth(ctx)
+	}
+	confsOut(out, s.confLevel(), terms.MinConfs, terms.XMR, reorg, terms.BlockSecs)
 	if wantUSDC || !offer.Asset.IsZero() {
 		out["asset"] = "USDC"
 		out["assetAddr"] = offer.Asset.Hex()
@@ -913,7 +933,7 @@ func (s *Server) startSwap(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	pol := eng.Policy
-	tp := takeLimits(pol, val)
+	tp := takeLimits(pol, val, s.wantConfs())
 	tp.MakerURL, tp.MinXMR, tp.HTTP = makerURL, req.MinXMR, s.http
 	if req.ListingID != 0 {
 		if !s.regEnabled() {
@@ -1015,6 +1035,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 			"registry":       addrStr(s.Cfg.Registry),
 			"exitLease":      addrStr(s.Cfg.ExitLease),
 			"exitRouterRpc":  s.Cfg.ExitRouterRPC,
+			"confirmations":  s.confLevelLocked(),
 		})
 	case http.MethodPut, http.MethodPost:
 		var req struct {

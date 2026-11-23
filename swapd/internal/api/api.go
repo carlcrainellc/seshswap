@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,13 +54,14 @@ type Offer struct {
 	D2          uint64       `json:"d2"`
 	MinConfs    uint64       `json:"minConfs"`
 	XmrNet      keys.Network `json:"xmrNet"`
-	RelayFee    *big.Int     `json:"relayFee"`   // deducted from the asset amount by the relayer
-	TTL         int64        `json:"ttl"`        // seconds the taker has to lock (quote expiry)
-	Grace       uint64       `json:"grace"`      // intent freeze; 0 = from policy
-	PremiumBps  uint64       `json:"premiumBps"` // taker premium (native-coin swaps), forfeited on a cancel after our ack
-	WaiveAfter  int          `json:"waiveAfter"` // waive the premium after this many completed swaps with the same taker (0 = never)
-	SpreadBps   uint64       `json:"spreadBps"`  // with a price oracle: maker's spread below the mid price
-	Direction   string       `json:"direction"`  // "eth2xmr" (only direction built so far)
+	RelayFee    *big.Int     `json:"relayFee"`           // deducted from the asset amount by the relayer
+	TTL         int64        `json:"ttl"`                // seconds the taker has to lock (quote expiry)
+	Grace       uint64       `json:"grace"`              // intent freeze; 0 = from policy
+	PremiumBps  uint64       `json:"premiumBps"`         // taker premium (native-coin swaps), forfeited on a cancel after our ack
+	WaiveAfter  int          `json:"waiveAfter"`         // waive the premium after this many completed swaps with the same taker (0 = never)
+	SpreadBps   uint64       `json:"spreadBps"`          // with a price oracle: maker's spread below the mid price
+	Direction   string       `json:"direction"`          // "eth2xmr" (only direction built so far)
+	MaxConfs    uint64       `json:"maxConfs,omitempty"` // most confirmations a taker may ask for; 0 = swap.XmrConfMax
 	Expires     int64        `json:"expires,omitempty"`
 }
 
@@ -76,6 +78,10 @@ type SwapRequest struct {
 	SpendPub  string      `json:"spendPub"`
 	ViewShare string      `json:"viewShare"`
 	Proof     keys.Proof  `json:"proof"`
+	// MinConfs is the least Monero confirmations the taker wants to wait for.
+	// The maker quotes at least this, or declines. Makers before 0.1.8 ignore
+	// it, so the taker checks the answer (CheckTerms).
+	MinConfs uint64 `json:"minConfs,omitempty"`
 }
 
 type SwapResponse struct {
@@ -139,7 +145,16 @@ func (m *Maker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": "value (base units) required"})
 			return
 		}
-		q, err := m.quote(r.Context(), v, eth.Address{})
+		var want uint64
+		if s := r.URL.Query().Get("minConfs"); s != "" {
+			n, err := strconv.ParseUint(s, 10, 64)
+			if err != nil {
+				writeJSON(w, 400, map[string]string{"error": "minConfs must be a whole number"})
+				return
+			}
+			want = n
+		}
+		q, err := m.quote(r.Context(), v, eth.Address{}, want)
 		if err != nil {
 			writeJSON(w, 422, map[string]string{"error": err.Error()})
 			return
@@ -217,7 +232,7 @@ func (m *Maker) newSwap(ctx context.Context, q *SwapRequest) (*SwapResponse, err
 	if err != nil {
 		return nil, fmt.Errorf("view share: %w", err)
 	}
-	terms, err := m.quote(ctx, q.Value, q.Owner)
+	terms, err := m.quote(ctx, q.Value, q.Owner, q.MinConfs)
 	if err != nil {
 		m.count("quote_rejected")
 		return nil, err
@@ -435,6 +450,9 @@ func Take(ctx context.Context, e *swap.Engine, p TakeParams) (*swap.Record, erro
 	}
 	req := SwapRequest{Session: session, Asset: o.Asset, Value: p.Value, Owner: e.EthKey.Address(),
 		SpendPub: mySpend.Public().Hex(), ViewShare: myView.Hex(), Proof: proof}
+	if p.MinConfs > swap.XmrConfFloor {
+		req.MinConfs = p.MinConfs
+	}
 	var resp SwapResponse
 	if err := postJSON(ctx, c, p.MakerURL+"/v1/swaps", req, &resp); err != nil {
 		return nil, err
@@ -558,6 +576,9 @@ func CheckTerms(ctx context.Context, e *swap.Engine, p TakeParams, d1, d2, minCo
 		return 0, TermsError{fmt.Sprintf("maker's timeouts are shorter than our minimums (%d s and %d s; we need %d s and %d s)", d1, d2, p.MinD1, p.MinD2)}
 	case minConfs > p.MaxConfs:
 		return 0, TermsError{"unacceptable confirmation count"}
+	case minConfs < p.MinConfs:
+		// We asked for more; a maker before 0.1.8 doesn't know the request.
+		return 0, TermsError{fmt.Sprintf("maker offered %d confirmations but we asked for %d (it may run an older version)", minConfs, p.MinConfs)}
 	case d1 < 2*e.Policy.Margin+swap.ConfirmSecs(confs, bs)+300:
 		return 0, TermsError{fmt.Sprintf("t1 too short for our safety margin and %d confirmations", confs)}
 	case grace < minGrace || grace > maxGrace:

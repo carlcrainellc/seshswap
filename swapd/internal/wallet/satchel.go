@@ -210,7 +210,7 @@ func (s *Server) satchelApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pol := s.eng.Policy
-	tp := takeLimits(pol, amount)
+	tp := takeLimits(pol, amount, s.wantConfs())
 	tp.MakerURL, tp.MinXMR, tp.HTTP = makerURL, p.MinXMR, s.http
 	rec, err := api.Take(ctx, s.eng, tp)
 	if err != nil {

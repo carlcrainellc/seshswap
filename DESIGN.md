@@ -98,13 +98,17 @@ v3 rule (`swap.XmrConfs`): **never fewer than 10 confirmations**, rising with th
 
 | XMR in the swap | Confirmations before Alice marks ready |
 |---|---|
-| < 10 XMR | 10 |
-| 10 – 50 XMR | 15 |
-| 50 – 200 XMR | 20 |
-| ≥ 200 XMR | 30 |
+| < 1 XMR | 10 |
+| 1 – 5 XMR | 15 |
+| 5 – 20 XMR | 20 |
+| ≥ 20 XMR | 30 |
 | any, after a reorg of depth d was seen | at least d + 4 |
 
-The taker applies this rule itself (the maker cannot lower it), and the maker sets t1 long enough for it (§15). Because the count is ≥ 10, the shared output is already spendable when Bob claims, so Alice's sweep goes out at once; her coins are spendable in her own wallet 10 blocks after the sweep. The quote and the daemon tell her when: `estReadySecs` / `estSpendableSecs` in the quote, "spendable from height N" in the log, `spendableAtHeight` in the swap status. See README for expected times.
+(Before 0.1.8 the steps were at 10, 50 and 200 XMR.)
+
+The taker applies this rule itself (the maker cannot lower it), and the maker sets t1 long enough for it (§15).
+
+**The taker can ask for more (0.1.8).** The swap request (`POST /v1/swaps`, field `minConfs`) and the quote (`GET /v1/quote?minConfs=`) can carry the least confirmations the taker wants. The maker quotes the highest of its own minimum, the table above and the taker's number, and sizes t1 for it. If the taker asks for more than the maker allows (`maxConfs` in the offer, default 60), the maker declines with a plain error. Makers before 0.1.8 ignore the field, so the taker refuses any answer below what it asked for instead of quietly waiting longer on windows sized for less. In the wallet this is Settings → Monero confirmations: Standard (the table), Safer (at least 20) or Safest (at least 30). `swapd take -min-confs N` does the same. Standard sends nothing new. Because the count is ≥ 10, the shared output is already spendable when Bob claims, so Alice's sweep goes out at once; her coins are spendable in her own wallet 10 blocks after the sweep. The quote and the daemon tell her when: `estReadySecs` / `estSpendableSecs` in the quote, "spendable from height N" in the log, `spendableAtHeight` in the swap status. See README for expected times.
 
 **Reorg trade-off, honestly:** more confirmations make a swap slower (each block ~2 min) but not safer than the deepest reorg an attacker can afford. 10 blocks would not have survived the 18-block Qubic reorg; a swap that marked ready at 10 confirmations during that attack could have been robbed. The `d + 4` rule reacts only after our daemon has *seen* a deep reorg, and an attacker who can do a 30-block reorg can defeat every tier. Large swaps should be split, or wait longer. There is no reorg tracking after `setReady` (once ready, Bob can claim; that is the point of no return). On the Ethereum side `ethConfs` (default 2 blocks) guards the lock, the intents and the late-refund timing; on L2s with a centralized sequencer that is a soft finality and a sequencer reorg remains a risk.
 

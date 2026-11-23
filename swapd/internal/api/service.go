@@ -107,7 +107,8 @@ func (m *Maker) currentOffer() (Offer, error) {
 }
 
 // quote computes the binding terms for value (owner may be zero for a preview).
-func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address) (*Terms, error) {
+// want is the confirmations the taker asked for (0 = no preference).
+func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address, want uint64) (*Terms, error) {
 	o := &m.Offer
 	if value == nil || value.Cmp(o.Min) < 0 || value.Cmp(o.Max) > 0 {
 		return nil, errors.New("asset or amount outside the offer")
@@ -123,7 +124,14 @@ func (m *Maker) quote(ctx context.Context, value *big.Int, owner eth.Address) (*
 	}
 	xmrAmt := x.Uint64()
 	pol := m.Engine.Policy
-	confs := max(o.MinConfs, swap.XmrConfs(xmrAmt, m.Engine.ReorgDepth(ctx)))
+	maxConfs := o.MaxConfs
+	if maxConfs == 0 {
+		maxConfs = swap.XmrConfMax
+	}
+	if want > maxConfs {
+		return nil, fmt.Errorf("this maker waits for at most %d Monero confirmations; you asked for %d", maxConfs, want)
+	}
+	confs := max(o.MinConfs, swap.XmrConfs(xmrAmt, m.Engine.ReorgDepth(ctx)), want)
 	bs, err := m.Engine.BlockSecs(ctx)
 	if err != nil {
 		return nil, err

@@ -340,7 +340,8 @@ func (s *Server) noMakerTakes(wantUSDC bool) bool {
 func (s *Server) fillQuote(ctx context.Context, mq *makerQuote, wantUSDC bool, val *big.Int) {
 	var terms api.Terms
 	base := strings.TrimRight(mq.URL, "/")
-	if err := getJSON(ctx, s.http, base+"/v1/quote?value="+val.String(), &terms); err != nil {
+	want := s.wantConfs()
+	if err := getJSON(ctx, s.http, base+"/v1/quote?value="+val.String()+quoteParam(want), &terms); err != nil {
 		mq.Reason = "no answer: " + friendlyNetErr(err)
 		// A maker refuses amounts outside its offer; say so in plain words.
 		var o api.Offer
@@ -382,7 +383,7 @@ func (s *Server) fillQuote(ctx context.Context, mq *makerQuote, wantUSDC bool, v
 	s.mu.Unlock()
 	if eng != nil {
 		var te api.TermsError
-		if _, err := api.CheckTerms(ctx, eng, takeLimits(eng.Policy, val), terms.D1, terms.D2, terms.MinConfs, terms.XMR, terms.Grace, terms.Premium); errors.As(err, &te) {
+		if _, err := api.CheckTerms(ctx, eng, takeLimits(eng.Policy, val, want), terms.D1, terms.D2, terms.MinConfs, terms.XMR, terms.Grace, terms.Premium); errors.As(err, &te) {
 			mq.Reason = "its swap terms don't meet this wallet's safety limits: " + err.Error()
 			return
 		}
@@ -602,9 +603,10 @@ func regView(r swap.Record, explorer string) map[string]any {
 
 // takeLimits are the taker's own limits for a swap of val, used both when
 // checking quotes and when starting a swap.
-func takeLimits(pol swap.Policy, val *big.Int) api.TakeParams {
+// want is the confirmation setting (never below the floor).
+func takeLimits(pol swap.Policy, val *big.Int, want uint64) api.TakeParams {
 	return api.TakeParams{Value: val, MinD1: 2*pol.Margin + 1800, MinD2: 2 * pol.Margin,
-		MaxConfs: 60, MinConfs: swap.XmrConfFloor}
+		MaxConfs: swap.XmrConfMax, MinConfs: max(want, swap.XmrConfFloor)}
 }
 
 // swapAssets reads each listed maker's offer (no quote) and says which assets

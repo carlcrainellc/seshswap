@@ -251,6 +251,16 @@ outlier. A live 0.001 ETH→XMR swap over `.sesh`, including a `kill -9`
 and resume, passed with exact balances.
 A quote allows 60 s, and a swap start 90 s.
 
+### Monero confirmations
+
+Settings → **Monero confirmations**: Standard (10 for small swaps, up to 30
+for large ones), Safer (at least 20) or Safest (at least 30). The choice is
+saved in `prefs.json` in the wallet folder, or set `"confirmations"` in the
+config. The wallet asks each maker for it with the quote and refuses a quote
+that offers fewer (an older maker). The quote screen shows the count and the
+extra wait. `PUT /v1/settings/confirmations` with
+`{"confirmations":"safer"}` changes it.
+
 ## Bonded makers from the registry
 
 With `"registry": "0x…"` (the Arbitrum Sepolia default is built in), the

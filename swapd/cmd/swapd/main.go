@@ -113,7 +113,7 @@ func main() {
 	makerURL := fs.String("maker", "", "take: maker URL")
 	value := fs.String("value", "", "take: amount in asset base units (wei)")
 	minXmr := fs.Uint64("min-xmr", 0, "take: refuse quotes below this many piconero")
-	minConfs := fs.Uint64("min-confs", swap.XmrConfFloor, "take: XMR confirmations before marking ready (never below 10; scales up with amount and reorg depth)")
+	minConfs := fs.Uint64("min-confs", swap.XmrConfFloor, "take: least XMR confirmations before marking ready; asked of the maker (never below 10; scales up with amount and reorg depth)")
 	makerID := fs.String("maker-id", "", "take: pin the maker identity (hex ed25519 key from its signed offer document)")
 	_ = fs.Parse(os.Args[2:])
 	cfg := mustConfig(*cfgPath)

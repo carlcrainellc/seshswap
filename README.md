@@ -36,6 +36,13 @@ Optional: `./install.sh` adds SeshSwap to your app menu (no sudo).
 `./seshswap check` checks that the bundled programs run on your machine.
 Your wallet lives in `~/.seshswap`.
 
+## Confirmations
+
+Before it finishes a swap, the wallet waits for the XMR to get enough Monero
+confirmations (about 2 minutes each). Small swaps wait 10. Larger ones wait
+more: 15 from 1 XMR, 20 from 5 XMR, 30 from 20 XMR. In Settings you can pick
+Safer (at least 20) or Safest (at least 30). Details: [design](DESIGN.md) §9.
+
 The tarball has the wallet, a bundled Session Router and the official
 `monero-wallet-rpc` (v0.18.5.4, checked against binaryFate's signed hashes).
 Testnet settings are built in.

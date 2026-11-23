@@ -65,8 +65,9 @@ func TestClaimerWindowMirrorsContract(t *testing.T) {
 func TestConfsPolicy(t *testing.T) {
 	const x = piconero
 	for _, c := range []struct{ amt, reorg, want uint64 }{
-		{x / 10, 0, 10}, {9 * x, 0, 10}, {10 * x, 0, 15}, {50 * x, 0, 20}, {500 * x, 0, 30},
-		{x, 18, 22}, {500 * x, 30, 34},
+		{x / 10, 0, 10}, {x - 1, 0, 10}, {x, 0, 15}, {5*x - 1, 0, 15}, {5 * x, 0, 20},
+		{20*x - 1, 0, 20}, {20 * x, 0, 30}, {500 * x, 0, 30},
+		{x / 10, 18, 22}, {x, 18, 22}, {500 * x, 30, 34},
 	} {
 		if got := XmrConfs(c.amt, c.reorg); got != c.want {
 			t.Fatalf("XmrConfs(%d, %d) = %d, want %d", c.amt, c.reorg, got, c.want)

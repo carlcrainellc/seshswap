@@ -15,6 +15,7 @@ import (
 
 const (
 	XmrConfFloor   = 10  // hard floor; never configurable lower
+	XmrConfMax     = 60  // most a taker may ask for, and the default cap a maker accepts
 	XmrSpendLock   = 10  // blocks before a received Monero output can be spent
 	XmrBlockSecs   = 120 // Monero target block time
 	reorgSafetyAdd = 4   // extra blocks on top of the deepest reorg we have seen
@@ -27,15 +28,17 @@ const (
 
 // XmrConfs is how many Monero confirmations the ETH side waits for before it
 // marks the swap ready, for a swap of xmr piconero, given the deepest recent
-// reorg (blocks). Larger swaps are worth more to an attacker who rents hashrate.
+// reorg (blocks). Larger swaps are worth more to an attacker who rents hashrate:
+// under 1 XMR 10, from 1 XMR 15, from 5 XMR 20, from 20 XMR 30. A taker can
+// ask for more (TakeParams.MinConfs); this is the least it ever waits.
 func XmrConfs(xmr uint64, reorgDepth uint64) uint64 {
 	n := uint64(XmrConfFloor)
 	switch {
-	case xmr >= 200*piconero:
+	case xmr >= 20*piconero:
 		n = 30
-	case xmr >= 50*piconero:
+	case xmr >= 5*piconero:
 		n = 20
-	case xmr >= 10*piconero:
+	case xmr >= 1*piconero:
 		n = 15
 	}
 	return max(n, reorgDepth+reorgSafetyAdd)
