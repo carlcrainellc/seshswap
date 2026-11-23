@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.1.8)
+## 0.1.8 — 23 November 2026
 
 - You can choose how many Monero confirmations to wait for: Settings →
   Monero confirmations, with Standard, Safer (at least 20) and Safest (at
@@ -16,7 +16,8 @@
 - Larger swaps wait longer sooner: 15 confirmations from 1 XMR, 20 from
   5 XMR and 30 from 20 XMR (was 10, 50 and 200 XMR). Under 1 XMR is still 10.
 
-No contract changes.
+No contract changes; same Arbitrum Sepolia contracts as 0.1.7. Makers
+before 0.1.8 still work; a wallet set to Safer or Safest skips them.
 
 ## 0.1.7
 
